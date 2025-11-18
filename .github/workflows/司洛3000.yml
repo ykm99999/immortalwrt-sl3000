@@ -24,12 +24,17 @@ jobs:
     - name: Checkout
       uses: actions/checkout@main
 
+    - name: Free disk space
+      run: |
+        echo "释放磁盘空间..."
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
+        sudo docker image prune --all --force
+        sudo apt-get clean
+
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -qq autoremove --purge
@@ -46,14 +51,12 @@ jobs:
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
         mkdir -p /workdir/openwrt/dl /workdir/openwrt/build_dir
 
+    # 可选：如果内存不足，建议注释掉下面的 tmpfs 挂载
     - name: Optimize disk space
       run: |
-        echo "清理磁盘空间并挂载 tmpfs..."
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
-        sudo apt-get -qq autoremove --purge
-        sudo apt-get -qq clean
-        sudo mount -t tmpfs -o size=6G tmpfs /workdir/openwrt/dl
-        sudo mount -t tmpfs -o size=10G tmpfs /workdir/openwrt/build_dir
+        echo "挂载 tmpfs (可选)"
+        sudo mount -t tmpfs -o size=2G tmpfs /workdir/openwrt/dl
+        sudo mount -t tmpfs -o size=6G tmpfs /workdir/openwrt/build_dir
 
     - name: Setup ccache
       run: |
@@ -109,7 +112,6 @@ jobs:
         cd openwrt
         make defconfig
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
@@ -117,6 +119,8 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
+        make tools/install -j$(nproc)
+        make toolchain/install -j$(nproc)
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -184,3 +188,8 @@ jobs:
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
