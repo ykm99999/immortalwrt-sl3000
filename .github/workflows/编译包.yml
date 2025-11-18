@@ -7,7 +7,7 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: 2410
-  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: 编译包.config
   TZ: Asia/Shanghai
 
 jobs:
@@ -41,10 +41,15 @@ jobs:
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
 
+    - name: Load custom configuration
+      run: |
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        cd openwrt
+        make defconfig
+
     - name: Build toolchain
       run: |
         cd openwrt
-        make defconfig
         make tools/install -j$(nproc)
         make toolchain/install -j$(nproc)
 
