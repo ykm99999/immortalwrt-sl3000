@@ -44,7 +44,6 @@ jobs:
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        # 创建挂载点目录
         mkdir -p /workdir/openwrt/dl /workdir/openwrt/build_dir
 
     - name: Optimize disk space
@@ -63,6 +62,19 @@ jobs:
         export CCACHE_DIR=/workdir/ccache
         export CCACHE_COMPRESS=1
         export CCACHE_MAXSIZE=2G
+
+    - name: Fix libubox host build
+      run: |
+        echo "清理 libubox host 构建目录..."
+        cd openwrt
+        rm -rf build_dir/hostpkg/libubox*
+        make package/libs/libubox/{clean,compile} V=s || true
+
+    - name: Ensure dependencies for libubox
+      run: |
+        echo "安装 libubox 编译所需依赖..."
+        sudo apt-get update
+        sudo apt-get install -y libjson-c-dev libncurses5-dev libncursesw5-dev
 
     - name: Load custom feeds
       run: |
@@ -172,8 +184,3 @@ jobs:
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
