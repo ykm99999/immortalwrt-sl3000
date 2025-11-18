@@ -35,3 +35,24 @@
    ```bash
    git clone https://github.com/ykm888/immortalwrt-sl3000.git
    cd immortalwrt-sl3000
+📥 下载与安装
+在 Releases 页面下载对应固件文件：
+
+- immortalwrt-mediatek-mt7981-sl3000-emmc-squashfs-factory.bin （首次刷机用）  
+- immortalwrt-mediatek-mt7981-sl3000-emmc-squashfs-sysupgrade.bin （升级用）  
+
+安装方法
+- 首次刷机：在原厂固件 Web 界面选择 factory.bin 文件刷入。  
+- 已运行 ImmortalWrt：在 Luci 管理界面 → 系统 → 升级 → 选择 sysupgrade.bin 文件刷入。  
+
+注意事项
+- 刷机前确认设备型号为 SL3000 (MT7981, eMMC)。  
+- 建议备份原始配置。  
+- 刷机过程中请勿断电。  
+
+---
+
+📌 声明
+本固件为个人定制版本，可能存在实验性功能。请谨慎使用。  
+作者不对因使用本固件造成的任何问题负责。  
+`
