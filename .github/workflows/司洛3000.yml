@@ -38,6 +38,15 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        # 创建挂载点目录
+        mkdir -p /workdir/openwrt/dl /workdir/openwrt/build_dir
+
     - name: Optimize disk space
       run: |
         echo "清理磁盘空间并挂载 tmpfs..."
@@ -54,13 +63,6 @@ jobs:
         export CCACHE_DIR=/workdir/ccache
         export CCACHE_COMPRESS=1
         export CCACHE_MAXSIZE=2G
-
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Load custom feeds
       run: |
