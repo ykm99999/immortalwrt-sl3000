@@ -1,59 +1,50 @@
-# ImmortalWrt SL3000 固件 (版本 24.10)
+# 司洛 SL-3000 精简固件与软件包编译说明
 
-本项目基于 [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) **24.10 主线源码**，针对 **SL3000 路由器 (MT7981 芯片, eMMC 存储)** 定制编译的固件。
+## 🔹 精简固件介绍
+本项目的固件采用 **极简化配置**，只保留设备运行所需的最基本功能：
+- 支持 MT7981 平台与 eMMC 存储
+- 保留基础驱动（GPIO、EMMC、NAND）
+- 保留内核日志输出（printk）
+- 不预装多余插件，保持固件体积小、运行稳定
 
----
-
-## ✨ 特性
-- 固件版本：**24.10**
-- 内核版本：**Linux 5.4 LTS**
-- 支持设备：**SL3000 (MT7981, eMMC)**
-- 集成功能：
-  - Docker
-  - Passwall
-  - SSR Plus
-- 默认启用：
-  - Luci 管理界面
-  - 防火墙
-  - PPPoE
-  - UPnP
+这样做的好处是：
+- 固件刷机更快，占用空间更小
+- 系统运行更稳定，减少不必要的依赖
+- 插件可以后续单独安装，灵活升级
 
 ---
 
-## 🛠 路由器配置
-- **硬件平台**：MT7981 SoC  
-- **存储**：eMMC  
-- **接口**：WAN/LAN 以太网  
-- **固件特性**：  
-  - 集成 Docker 容器支持  
-  - 集成科学上网插件（Passwall、SSR Plus）  
-  - 默认启用防火墙、PPPoE、UPnP、Luci Web 管理  
+## 🔹 精简固件说明
+- 固件只包含最小化的系统组件（BusyBox、opkg 等）
+- 不包含 Luci、Docker、SSR Plus、Passwall 等插件
+- 用户可以通过 `opkg install` 单独安装需要的软件包
+- 适合追求轻量化和可定制化的用户
 
 ---
 
-## 🚀 使用方法
-1. 克隆本仓库：
+## 🔹 编译包介绍
+为了保持固件精简，本项目提供 **独立的软件包编译** 工作流：
+- 使用 GitHub Actions 自动编译指定插件
+- 编译结果为 `.ipk` 格式的二进制安装包
+- 插件包会自动上传到 **Release 页面**，可直接下载使用
+
+### 已支持的软件包
+- **Docker**（luci-app-docker）  
+  提供容器运行环境，需要内核支持 cgroups、overlayfs 等  
+- **SSR Plus**（luci-app-ssr-plus）  
+  支持多种代理协议，依赖 TUN 虚拟网卡  
+- **Cloudflare 隧道**（cloudflared）  
+  提供安全的远程访问通道，无需额外内核支持  
+- **Turbo ACC 网络加速**（luci-app-turboacc）  
+  提供 Shortcut-FE、BBR、Flow Offload 等加速功能  
+- **Passwall**（luci-app-passwall）  
+  高级代理插件，支持多种协议，依赖 TUN/NAT/Conntrack  
+
+---
+
+## 🔹 使用方法
+1. 在 Release 页面下载对应的 `.ipk` 包  
+2. 上传到路由器  
+3. 执行安装命令：
    ```bash
-   git clone https://github.com/ykm888/immortalwrt-sl3000.git
-   cd immortalwrt-sl3000
-
-   📥 下载与安装
-在 Releases 页面下载对应固件文件：
-
-- immortalwrt-mediatek-mt7981-sl3000-emmc-squashfs-factory.bin （首次刷机用）  
-- immortalwrt-mediatek-mt7981-sl3000-emmc-squashfs-sysupgrade.bin （升级用）  
-
-安装方法
-- 首次刷机：在原厂固件 Web 界面选择 factory.bin 文件刷入。  
-- 已运行 ImmortalWrt：在 Luci 管理界面 → 系统 → 升级 → 选择 sysupgrade.bin 文件刷入。  
-
-注意事项
-- 刷机前确认设备型号为 SL3000 (MT7981, eMMC)。  
-- 建议备份原始配置。  
-- 刷机过程中请勿断电。  
-
----
-
-📌 声明
-本固件基于 ImmortalWrt 24.10 编译，可能存在实验性功能。请谨慎使用。  
-作者不对因使用本固件造成的任何问题负责。 
+   opkg install xxx.ipk
