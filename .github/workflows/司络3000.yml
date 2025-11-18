@@ -1,4 +1,5 @@
-name: 司洛SL-3000 EMMC
+
+name: 司络SL-3000 EMMC
 
 on:
   repository_dispatch:
@@ -24,17 +25,12 @@ jobs:
     - name: Checkout
       uses: actions/checkout@main
 
-    - name: Free disk space
-      run: |
-        echo "释放磁盘空间..."
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
-        sudo docker image prune --all --force
-        sudo apt-get clean
-
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -qq autoremove --purge
@@ -49,35 +45,6 @@ jobs:
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        mkdir -p /workdir/openwrt/dl /workdir/openwrt/build_dir
-
-    # 可选：如果内存不足，建议注释掉下面的 tmpfs 挂载
-    - name: Optimize disk space
-      run: |
-        echo "挂载 tmpfs (可选)"
-        sudo mount -t tmpfs -o size=2G tmpfs /workdir/openwrt/dl
-        sudo mount -t tmpfs -o size=6G tmpfs /workdir/openwrt/build_dir
-
-    - name: Setup ccache
-      run: |
-        echo "启用 ccache 缓存编译结果..."
-        mkdir -p /workdir/ccache
-        export CCACHE_DIR=/workdir/ccache
-        export CCACHE_COMPRESS=1
-        export CCACHE_MAXSIZE=2G
-
-    - name: Fix libubox host build
-      run: |
-        echo "清理 libubox host 构建目录..."
-        cd openwrt
-        rm -rf build_dir/hostpkg/libubox*
-        make package/libs/libubox/{clean,compile} V=s || true
-
-    - name: Ensure dependencies for libubox
-      run: |
-        echo "安装 libubox 编译所需依赖..."
-        sudo apt-get update
-        sudo apt-get install -y libjson-c-dev libncurses5-dev libncursesw5-dev
 
     - name: Load custom feeds
       run: |
@@ -100,18 +67,13 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: Enable ccache in config
-      run: |
-        cd openwrt
-        echo "CONFIG_DEVEL=y" >> .config
-        echo "CONFIG_CCACHE=y" >> .config
-
     - name: Download package
       id: package
       run: |
         cd openwrt
         make defconfig
         make download -j8
+        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
@@ -119,8 +81,6 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -147,12 +107,6 @@ jobs:
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Clean build artifacts
-      run: |
-        echo "清理不必要的构建产物以节省空间..."
-        rm -rf openwrt/bin/packages
-        rm -rf openwrt/tmp
-
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
@@ -166,6 +120,7 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
+        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 发布固件至Release
