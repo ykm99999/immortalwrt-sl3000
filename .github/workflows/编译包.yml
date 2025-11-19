@@ -1,4 +1,4 @@
-name: 司洛SL-3000 软件包编译
+name: 司络SL-3000 软件包编译
 
 on:
   repository_dispatch:
@@ -53,19 +53,20 @@ jobs:
         make tools/install -j$(nproc)
         make toolchain/install -j$(nproc)
 
+    - name: Clone extra packages
+      run: |
+        cd openwrt/package
+        git clone https://github.com/fw876/helloworld luci-app-ssr-plus
+        git clone https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
+
     - name: Compile packages
       run: |
         cd openwrt
-        # Docker
-        make package/luci-app-docker/{clean,compile} V=s
-        # SSR Plus
-        make package/luci-app-ssr-plus/{clean,compile} V=s
-        # Cloudflare 隧道
-        make package/cloudflared/{clean,compile} V=s
-        # Turbo ACC 网络加速
-        make package/luci-app-turboacc/{clean,compile} V=s
-        # Passwall
-        make package/luci-app-passwall/{clean,compile} V=s
+        make package/luci-app-docker/compile V=s
+        make package/luci-app-ssr-plus/compile V=s
+        make package/cloudflared/compile V=s
+        make package/luci-app-turboacc/compile V=s
+        make package/luci-app-passwall/compile V=s
 
     - name: Upload packages
       uses: actions/upload-artifact@main
