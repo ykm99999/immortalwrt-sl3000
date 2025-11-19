@@ -1,9 +1,12 @@
-
 name: 司络SL-3000 EMMC
 
 on:
   repository_dispatch:
   workflow_dispatch:
+
+# 👇 必须添加这一段，确保 GITHUB_TOKEN 有权限创建 Release
+permissions:
+  contents: write
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
