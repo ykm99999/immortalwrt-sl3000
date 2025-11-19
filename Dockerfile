@@ -11,3 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libncurses5-dev zlib1g-dev gawk flex gettext \
     libssl-dev xsltproc rsync file \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 创建工作目录
+RUN mkdir -p /sdk
+WORKDIR /sdk
