@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for SL-3000
+？name: Build ImmortalWrt for SL-3000
 
 on:
   workflow_dispatch:
