@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
     - name: Checkout this repo
@@ -24,7 +24,8 @@ jobs:
         sudo apt-get clean
 
     - name: Build Docker image
-      run: docker build -t openwrt-builder .
+      run: |
+        docker build --no-cache --progress=plain -t openwrt-builder .
 
     - name: Run Docker container to compile
       run: |
