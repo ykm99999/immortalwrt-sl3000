@@ -21,30 +21,71 @@
 - 适合追求轻量化和可定制化的用户
 
 ---
+# 📦 路由器固件软件包说明
 
-## 🔹 编译包介绍
-为了保持固件精简，本项目提供 **独立的软件包编译** 工作流：
-- 使用 GitHub Actions 自动编译指定插件
-- 编译结果为 `.ipk` 格式的二进制安装包
-- 插件包会自动上传到 **Release 页面**，可直接下载使用
-
-### 已支持的软件包
-- **Docker**（luci-app-docker）  
-  提供容器运行环境，需要内核支持 cgroups、overlayfs 等  
-- **SSR Plus**（luci-app-ssr-plus）  
-  支持多种代理协议，依赖 TUN 虚拟网卡  
-- **Cloudflare 隧道**（cloudflared）  
-  提供安全的远程访问通道，无需额外内核支持  
-- **Turbo ACC 网络加速**（luci-app-turboacc）  
-  提供 Shortcut-FE、BBR、Flow Offload 等加速功能  
-- **Passwall**（luci-app-passwall）  
-  高级代理插件，支持多种协议，依赖 TUN/NAT/Conntrack  
+本固件集成了常用的系统工具、容器支持、网络加速、代理功能以及固件在线升级，适合家庭宽带、远程访问和高性能路由场景。
 
 ---
 
-## 🔹 使用方法
-1. 在 Release 页面下载对应的 `.ipk` 包  
-2. 上传到路由器  
-3. 执行安装命令：
-   ```bash
-   opkg install xxx.ipk
+## 🛠️ 基础工具链
+- **base-files**：OpenWrt 基础文件与系统结构  
+- **busybox**：轻量级工具集，提供常用命令  
+- **opkg**：OpenWrt 包管理器，支持软件安装与更新  
+- **modules**：支持内核模块加载，保证系统可扩展性  
+
+---
+
+## 🐳 Docker 支持
+- **luci-app-docker**：Web 界面管理 Docker 容器  
+- **kmod-veth / kmod-bridge**：虚拟网卡与桥接支持  
+- **kmod-overlay**：OverlayFS 支持，便于容器存储管理  
+- **kmod-fs-ext4 / btrfs / xfs**：多种文件系统驱动，支持容器卷挂载  
+- **kmod-cgroup**：Linux CGroup 支持，容器资源隔离与限制  
+- **kmod-nf-nat**：网络地址转换 (NAT)，保证容器网络互通  
+
+---
+
+## 🌐 Cloudflare 隧道
+- **cloudflared**：Cloudflare Tunnel 客户端  
+  - 提供安全隧道接入  
+  - 支持内网穿透与远程访问  
+  - 加密传输，利用 Cloudflare 网络加速  
+
+---
+
+## ⚡ 网络加速
+- **luci-app-turboacc**：综合网络加速插件  
+  - 集成 **Shortcut-FE** 快速转发  
+  - **TCP BBR** 拥塞控制算法  
+  - **全锥型 NAT (FullCone NAT)**  
+  - **Flow Offloading** 流量分载  
+- **luci-app-sqm**：智能队列管理 (SQM)，缓解 Bufferbloat，优化延迟  
+
+---
+
+## 🔐 Passwall2 支持
+- **luci-app-passwall2**：新版多协议代理插件，结构更简洁，更新更快  
+- 依赖支持：
+  - **tun**：虚拟网卡驱动  
+  - **nat**：网络地址转换  
+  - **conntrack**：连接跟踪模块  
+
+---
+
+## 🔄 固件在线升级
+- **luci-app-attendedsysupgrade**：LuCI 在线升级界面  
+- **rpcd-mod-iwinfo**：提供升级所需的系统信息  
+- **attendedsysupgrade-common**：后台支持模块，保证升级过程稳定  
+
+---
+
+## 📌 总结
+该固件提供了：
+- **基础系统工具链**  
+- **Docker 容器支持**  
+- **Cloudflare 隧道接入**  
+- **Turbo ACC 网络加速**  
+- **Passwall2 多协议代理**  
+- **固件在线升级**  
+
+适合需要 **容器化应用 + 网络加速 + 安全隧道 + 代理功能 + 在线升级** 的路由器固件编译场景。
