@@ -35,9 +35,12 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          make menuconfig
           make defconfig
-          make tools/install -j$(nproc)
-          make toolchain/install -j$(nproc)
+          make tools/clean
+          make toolchain/clean
+          make tools/install -j1 V=s
+          make toolchain/install -j1 V=s
           cd package
           git clone https://github.com/fw876/helloworld luci-app-ssr-plus
           git clone https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
