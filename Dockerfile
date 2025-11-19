@@ -1,22 +1,22 @@
-FROM debian:bullseye
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 使用清华源（适用于 Debian）
-RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
+# 使用清华源
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list \
+ && sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list
 
 # 更新索引
 RUN apt-get update
 
-# 安装核心构建工具（替代 build-essential）
-RUN apt-get install -y --no-install-recommends \
-    gcc g++ make cmake git curl wget unzip rsync vim \
-    autoconf automake autopoint bison flex gawk gettext pkgconf \
-    libtool texinfo intltool help2man \
-    zlib1g-dev libssl-dev libreadline-dev libncurses5-dev libncursesw5-dev \
-    libelf-dev libfuse-dev libglib2.0-dev libgmp-dev libmpc-dev libmpfr-dev \
-    python3 python3-pip python3-setuptools python3-pyelftools \
-    clang llvm lld lldb libclang-dev libllvm-dev liblldb-dev \
-    ccache ninja-build scons swig qemu-utils squashfs-tools \
-    bzip2 p7zip-full zip \
- && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# 单独安装每个包，便于定位错误
+RUN apt-get install -y --no-install-recommends gcc
+RUN apt-get install -y --no-install-recommends g++
+RUN apt-get install -y --no-install-recommends make
+RUN apt-get install -y --no-install-recommends cmake
+RUN apt-get install -y --no-install-recommends git
+RUN apt-get install -y --no-install-recommends curl
+RUN apt-get install -y --no-install-recommends wget
+
+# 清理缓存
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
