@@ -29,7 +29,11 @@ jobs:
           cd immortalwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          cp /builder/sl3000.config .config || make defconfig
+          if [ -f /builder/sl3000.config ]; then
+            cp /builder/sl3000.config .config
+          else
+            make defconfig
+          fi
           make tools/install -j1 V=s
           make toolchain/install -j1 V=s
           make target/compile -j1 V=s
