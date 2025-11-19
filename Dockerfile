@@ -3,6 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 
+# 安装依赖
 RUN apt-get update && apt-get install -y \
   ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl \
   device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool \
@@ -12,4 +13,8 @@ RUN apt-get update && apt-get install -y \
   qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev \
   && rm -rf /var/lib/apt/lists/*
 
+# 设置工作目录
 WORKDIR /workdir
+
+# 启用 ccache
+ENV PATH="/usr/lib/ccache:${PATH}"
