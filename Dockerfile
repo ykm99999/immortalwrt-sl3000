@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 
-# 安装依赖
+# 安装基础依赖
 RUN apt-get update && apt-get install -y \
   ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl \
   device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool \
@@ -11,9 +11,13 @@ RUN apt-get update && apt-get install -y \
   libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp \
   ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools \
   qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev \
+  clang llvm clang-format clang-tidy lld lldb libclang-dev libclang-common-dev libclang-cpp-dev libclang1 \
+  libllvm-dev libllvm15 liblldb-dev liblldb-15-dev liblldb3 \
   && rm -rf /var/lib/apt/lists/*
 
-# 启用 ccache 加速
-ENV PATH="/usr/lib/ccache:${PATH}"
+# 安装 Rust 工具链（用于构建 xray/sing-box/tuic）
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH="/root/.cargo/bin:/usr/lib/ccache:${PATH}"
 
+# 设置工作目录
 WORKDIR /workdir
