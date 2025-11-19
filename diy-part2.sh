@@ -10,3 +10,7 @@ sed -i "s/luci-theme-bootstrap/$DEFAULT_THEME/g" feeds/luci/collections/luci/Mak
 # 修改默认主机名
 DEFAULT_HOSTNAME=${DEFAULT_HOSTNAME:-P3TERX-Router}
 sed -i "s/OpenWrt/$DEFAULT_HOSTNAME/g" package/base-files/files/bin/config_generate
+# 删除 SSR Plus 相关配置
+sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus/d' .config
+sed -i '/CONFIG_PACKAGE_kmod-tun/d' .config
+sed -i '/CONFIG_PACKAGE_kmod-nf-conntrack/d' .config
