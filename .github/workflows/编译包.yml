@@ -30,6 +30,7 @@ jobs:
     - name: Run Docker container to compile
       run: |
         docker run --rm -v ${{ github.workspace }}:/workdir openwrt-builder bash -c "
+          set -e
           cd /workdir
           git clone $REPO_URL -b $REPO_BRANCH openwrt
           cp $CONFIG_FILE openwrt/.config
@@ -40,8 +41,8 @@ jobs:
           make defconfig
           make tools/clean
           make toolchain/clean
-          make tools/install -j1 V=s
-          make toolchain/install -j1 V=s
+          make tools/install -j$(nproc) V=s
+          make toolchain/install -j$(nproc) V=s
           cd package
           git clone https://github.com/fw876/helloworld luci-app-ssr-plus
           git clone https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
