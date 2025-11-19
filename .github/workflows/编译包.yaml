@@ -1,12 +1,7 @@
-name: OpenWrt SDK Build
+name: Build ImmortalWrt for SL-3000
 
 on:
   workflow_dispatch:
-
-env:
-  SDK_URL: https://downloads.openwrt.org/releases/23.05.0/targets/mediatek/mt7981/openwrt-sdk-23.05.0-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-  CONFIG_FILE: 编译包.config
-  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -16,33 +11,24 @@ jobs:
     - name: Checkout this repo
       uses: actions/checkout@v3
 
-    - name: Free disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
-        sudo docker image prune --all --force
-        sudo apt-get clean
-
     - name: Build Docker image
-      run: docker build -t openwrt-sdk .
+      run: docker build -t immortalwrt-builder .
 
-    - name: Run SDK container
+    - name: Compile firmware
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workdir openwrt-sdk bash -c "
-          set -e
-          cd /sdk
-          echo '📦 下载 OpenWrt SDK...'
-          wget -q $SDK_URL -O sdk.tar.xz
-          tar -xf sdk.tar.xz
-          cd openwrt-sdk-*
-          cp /workdir/${{ env.CONFIG_FILE }} .config
+        docker run --rm -v ${{ github.workspace }}:/builder immortalwrt-builder bash -c "
+          cd /builder
+          git clone https://github.com/immortalwrt/immortalwrt.git
+          cd immortalwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          cp /builder/sl3000.config .config
           make defconfig
-          make package/luci-app-ssr-plus/compile -j$(nproc) V=s
+          make -j$(nproc) V=s
         "
 
-    - name: Upload compiled packages
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt_packages
-        path: sdk/openwrt-sdk-*/bin/packages
+        name: SL3000_firmware
+        path: immortalwrt/bin/targets
