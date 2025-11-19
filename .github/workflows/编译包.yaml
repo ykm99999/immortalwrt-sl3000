@@ -20,18 +20,20 @@ jobs:
     - name: Build Docker image
       run: docker build -t immortalwrt-builder .
 
-    - name: Compile firmware
+    - name: Compile firmware in stages
       run: |
         docker run --rm -v ${{ github.workspace }}:/builder immortalwrt-builder bash -c "
           set -e
           cd /builder
-          git clone https://github.com/immortalwrt/immortalwrt.git
+          git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git
           cd immortalwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          cp /builder/sl3000.config .config
-          make defconfig
-          make -j$(nproc) V=s
+          cp /builder/sl3000.config .config || make defconfig
+          make tools/install -j1 V=s
+          make toolchain/install -j1 V=s
+          make target/compile -j1 V=s
+          make package/compile -j1 V=s
         "
 
     - name: Upload firmware
