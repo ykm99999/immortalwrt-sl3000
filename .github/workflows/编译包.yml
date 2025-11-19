@@ -1,7 +1,6 @@
-name: 司洛SL-3000 软件包编译
+name: Docker Build for SL-3000
 
 on:
-  repository_dispatch:
   workflow_dispatch:
 
 env:
@@ -12,11 +11,11 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
+    - name: Checkout this repo
+      uses: actions/checkout@v3
 
     - name: Free disk space
       run: |
@@ -24,52 +23,34 @@ jobs:
         sudo docker image prune --all --force
         sudo apt-get clean
 
-    - name: Initialization environment
+    - name: Build Docker image
+      run: docker build -t openwrt-builder .
+
+    - name: Run Docker container to compile
       run: |
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        docker run --rm -v ${{ github.workspace }}:/workdir openwrt-builder bash -c "
+          cd /workdir
+          git clone $REPO_URL -b $REPO_BRANCH openwrt
+          cp $CONFIG_FILE openwrt/.config
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
+          make tools/install -j$(nproc)
+          make toolchain/install -j$(nproc)
+          cd package
+          git clone https://github.com/fw876/helloworld luci-app-ssr-plus
+          git clone https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
+          cd ..
+          make package/luci-app-docker/compile V=s
+          make package/luci-app-ssr-plus/compile V=s
+          make package/cloudflared/compile V=s
+          make package/luci-app-turboacc/compile V=s
+          make package/luci-app-passwall/compile V=s
+        "
 
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
-
-    - name: Load custom configuration
-      run: |
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        cd openwrt
-        make defconfig
-
-    - name: Build toolchain
-      run: |
-        cd openwrt
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
-
-    - name: Clone extra packages
-      run: |
-        cd openwrt/package
-        git clone https://github.com/fw876/helloworld luci-app-ssr-plus
-        git clone https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
-
-    - name: Compile packages
-      run: |
-        cd openwrt
-        make package/luci-app-docker/compile V=s
-        make package/luci-app-ssr-plus/compile V=s
-        make package/cloudflared/compile V=s
-        make package/luci-app-turboacc/compile V=s
-        make package/luci-app-passwall/compile V=s
-
-    - name: Upload packages
-      uses: actions/upload-artifact@main
+    - name: Upload compiled packages
+      uses: actions/upload-artifact@v3
       with:
         name: OpenWrt_packages
         path: openwrt/bin/packages
@@ -77,11 +58,11 @@ jobs:
     - name: Generate release tag
       id: tag
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
+        echo "release_tag=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
         echo "status=success" >> $GITHUB_OUTPUT
+        echo "Build completed at $(date)" > release.txt
 
-    - name: 发布软件包至Release
+    - name: 发布软件包至 Release
       uses: softprops/action-gh-release@v2.1.0
       if: steps.tag.outputs.status == 'success'
       env:
@@ -90,4 +71,4 @@ jobs:
         files: openwrt/bin/packages/**/*.ipk
         name: 软件包_${{ steps.tag.outputs.release_tag }}
         tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: "release.txt"
+        body_path: release.txt
