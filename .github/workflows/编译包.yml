@@ -70,7 +70,8 @@ jobs:
 
     - name: Upload packages
       uses: actions/upload-artifact@main
-      withWrt_packages
+      with:
+        name: OpenWrt_packages
         path: openwrt/bin/packages
 
     - name: Generate release tag
@@ -89,4 +90,4 @@ jobs:
         files: openwrt/bin/packages/**/*.ipk
         name: 软件包_${{ steps.tag.outputs.release_tag }}
         tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
+        body_path: "release.txt"
