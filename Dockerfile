@@ -6,27 +6,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list \
  && sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list
 
-# 更新并安装基础工具
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git curl wget unzip rsync vim \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# 更新索引（加重试机制）
+RUN bash -c 'for i in {1..5}; do apt-get update && break || sleep 5; done'
 
-# 安装编译工具
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    autoconf automake autopoint bison flex gawk gettext pkgconf \
-    libtool texinfo intltool help2man \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# 安装基础工具（逐步执行）
+RUN apt-get install -y --no-install-recommends build-essential || true
+RUN apt-get install -y --no-install-recommends cmake || true
+RUN apt-get install -y --no-install-recommends git || true
+RUN apt-get install -y --no-install-recommends curl || true
+RUN apt-get install -y --no-install-recommends wget || true
+RUN apt-get install -y --no-install-recommends unzip || true
+RUN apt-get install -y --no-install-recommends rsync || true
+RUN apt-get install -y --no-install-recommends vim || true
 
-# 安装常用库
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    zlib1g-dev libssl-dev libreadline-dev libncurses5-dev libncursesw5-dev \
-    libelf-dev libfuse-dev libglib2.0-dev libgmp-dev libmpc-dev libmpfr-dev \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# 安装 Python3 和工具链
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-setuptools python3-pyelftools \
-    clang llvm lld lldb libclang-dev libllvm-dev liblldb-dev \
-    ccache ninja-build scons swig qemu-utils squashfs-tools \
-    bzip2 p7zip-full zip \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# 清理缓存
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
