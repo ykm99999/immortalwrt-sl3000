@@ -13,8 +13,7 @@ RUN apt-get update && apt-get install -y \
   qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
-WORKDIR /workdir
-
-# 启用 ccache
+# 启用 ccache 加速
 ENV PATH="/usr/lib/ccache:${PATH}"
+
+WORKDIR /workdir
