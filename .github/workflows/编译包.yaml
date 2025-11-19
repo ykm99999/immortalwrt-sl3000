@@ -22,22 +22,52 @@ jobs:
 
     - name: Compile firmware in stages
       run: |
-        docker run --rm -v ${{ github.workspace }}:/builder immortalwrt-builder bash -c "
+        docker run --rm -e TERM=xterm-256color -v ${{ github.workspace }}:/builder immortalwrt-builder bash -c "
           set -e
           cd /builder
+
+          # 1) 克隆 ImmortalWrt
           git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git
           cd immortalwrt
+
+          # 2) 写入 feeds（包含你选择的包所需的第三方源）
+          cat > feeds.conf << 'EOF'
+          src-git packages https://github.com/immortalwrt/packages.git;master
+          src-git luci https://github.com/immortalwrt/luci.git;master
+          src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
+          src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+          # Passwall2/Sing-box/Xray/V2Ray/TUIC:
+          src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
+          # TurboACC（SBWML维护）：
+          src-git sbwml https://github.com/sbwml/luci-app-turboacc.git;main
+          # Cloudflared（可选，若你启用 luci-app-cloudflared）：
+          src-git cloudflared https://github.com/sbwml/luci-app-cloudflared.git;main
+          EOF
+
+          # 3) 更新/安装 feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
+          # 4) 预置 .config（绝不调用 menuconfig）
           if [ -f /builder/sl3000.config ]; then
             cp /builder/sl3000.config .config
           else
+            # 至少保证非交互默认配置生成
             make defconfig
           fi
+
+          # 5) 非交互刷新配置（避免任何 mconf 交互）
+          # olddefconfig 会用 .config 的选项并填充默认值，不会打开 TUI
+          make olddefconfig
+
+          # 6) 分阶段编译，便于定位与稳定
           make tools/install -j1 V=s
           make toolchain/install -j1 V=s
           make target/compile -j1 V=s
           make package/compile -j1 V=s
+
+          # 7) 最终汇总构建（并发开到 CPU 上限）
+          make -j\$(nproc) V=s
         "
 
     - name: Upload firmware
