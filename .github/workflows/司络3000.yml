@@ -58,6 +58,11 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
+    - name: Clean broken packages
+      run: |
+        cd openwrt/package/feeds/packages
+        rm -rf strongswan sudo tac_plus tcsh ufp usbgadget uw-imap xinetd xupnpd || true
+
     - name: Load custom configuration
       run: |
         [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
