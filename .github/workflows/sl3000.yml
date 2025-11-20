@@ -1,375 +1,47 @@
-name: 司络SL-3000 EMMC Docker编译
+name: SL-3000 极速编译
 
 on:
-  repository_dispatch:
   workflow_dispatch:
-    inputs:
-      skip_upload:
-        description: '跳过固件上传'
-        required: false
-        default: false
-        type: boolean
-      clean_build:
-        description: '完全清理重新编译'
-        required: false
-        default: false
-        type: boolean
-
-permissions:
-  contents: write
-
-env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: 2410
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: sl3000.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
-  TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
-    container:
-      image: ubuntu:22.04
-      options: |-
-        --privileged
-        --storage-opt size=30G
-        --tmpfs /tmp:exec,mode=777
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    timeout-minutes: 60
 
     steps:
     - name: 检查代码
       uses: actions/checkout@v4
 
-    - name: 配置容器环境
-      run: |
-        # 配置时区和基础环境
-        ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-        
-        # 更新源并安装必要工具
-        apt-get update
-        apt-get install -y \
-          software-properties-common \
-          curl wget git sudo file \
-          python3 python3-pip
-        
-        # 添加编译工具源
-        add-apt-repository -y ppa:ubuntu-toolchain-r/test
-        
-        # 安装完整编译工具链
-        apt-get update && apt-get install -y \
-          build-essential ccache cmake ninja-build \
-          gcc-11 g++-11 gcc-11-multilib g++-11-multilib \
-          autoconf automake autopoint libtool pkg-config \
-          flex bison gettext texinfo help2man \
-          libncurses5-dev libncursesw5-dev libreadline-dev \
-          libssl-dev libelf-dev libfuse-dev libglib2.0-dev \
-          libgmp3-dev libmpc-dev libmpfr-dev \
-          zlib1g-dev libltdl-dev libpython3-dev \
-          subversion git rsync scons swig \
-          asciidoc xmlto uglifyjs msmtp \
-          device-tree-compiler kmod lrzsz \
-          p7zip-full p7zip-rar unrar-free unzip zip \
-          ack antlr3 cpio fastjar gawk haveged intltool mkisofs patch \
-          qemu-utils squashfs-tools upx-ucl xxd jq
-        
-        # 配置编译器和缓存
-        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110
-        update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 110
-        update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-11 110
-        update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-11 110
-        
-        # 创建必要目录
-        mkdir -p /workdir /tmp/ccache
-        chmod 777 /workdir /tmp/ccache
+    - name: 缓存优化
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.ccache
+          openwrt/dl
+          openwrt/staging_dir
+        key: ${{ runner.os }}-fast-${{ hashFiles('sl3000.config') }}
 
-    - name: 配置编译缓存
+    - name: 环境准备
       run: |
-        ccache -o compression=true
-        ccache -o max_size=2G
-        ccache -s
-        echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
+        sudo apt-get update
+        sudo apt-get install -y build-essential ccache cmake git libssl-dev
 
-    - name: 准备编译环境
+    - name: 快速编译
       run: |
-        # 设置环境变量
-        echo "WORKDIR=/workdir" >> $GITHUB_ENV
-        echo "MAKE_JOBS=$(nproc)" >> $GITHUB_ENV
-        
-        # 显示系统信息
-        echo "=== 系统信息 ==="
-        df -h
-        free -h
-        nproc
-        gcc --version
-        ccache --version
-
-    - name: 克隆源代码
-      id: clone
-      working-directory: /workdir
-      env:
-        GIT_CLONE_FLAGS: --depth=1 --single-branch
-      run: |
-        if [ "${{ inputs.clean_build }}" = "true" ] || [ ! -d "openwrt" ]; then
-          echo "执行全新克隆..."
-          rm -rf openwrt
-          git clone $GIT_CLONE_FLAGS $REPO_URL -b $REPO_BRANCH openwrt
-          echo "clone_status=fresh" >> $GITHUB_OUTPUT
-        else
-          echo "使用缓存代码库..."
-          cd openwrt
-          git fetch $GIT_CLONE_FLAGS origin $REPO_BRANCH
-          git reset --hard origin/$REPO_BRANCH
-          echo "clone_status=cached" >> $GITHUB_OUTPUT
-        fi
-        
-        # 创建符号链接到工作区
-        ln -sf /workdir/openwrt /github/workspace/openwrt
-        echo "代码库准备完成"
-
-    - name: 应用自定义配置
-      working-directory: /github/workspace
-      run: |
-        set -e
-        
-        # 应用feeds配置
-        if [ -f "$FEEDS_CONF" ]; then
-          echo "应用feeds配置..."
-          cp $FEEDS_CONF /workdir/openwrt/feeds.conf.default
-        fi
-        
-        # 执行第一部分DIY脚本
-        if [ -f "$DIY_P1_SH" ] && [ -x "$DIY_P1_SH" ]; then
-          echo "执行DIY第一部分脚本..."
-          cd /workdir/openwrt
-          /github/workspace/$DIY_P1_SH
-        fi
-
-    - name: 更新和安装feeds
-      working-directory: /workdir/openwrt
-      env:
-        CCACHE_DIR: /tmp/ccache
-      run: |
-        set -e
-        echo "开始更新feeds..."
+        # 一键式编译脚本
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 openwrt
+        cd openwrt
         ./scripts/feeds update -a
-        echo "开始安装feeds..."
         ./scripts/feeds install -a
-        echo "Feeds处理完成"
-
-    - name: 应用自定义文件和配置
-      working-directory: /github/workspace
-      run: |
-        set -e
-        
-        # 应用自定义文件
-        if [ -d "files" ]; then
-          echo "应用自定义文件..."
-          cp -r files /workdir/openwrt/files
-        fi
-        
-        # 应用配置文件
-        if [ -f "$CONFIG_FILE" ]; then
-          echo "应用配置文件..."
-          cp $CONFIG_FILE /workdir/openwrt/.config
-        fi
-        
-        # 执行第二部分DIY脚本
-        if [ -f "$DIY_P2_SH" ] && [ -x "$DIY_P2_SH" ]; then
-          echo "执行DIY第二部分脚本..."
-          cd /workdir/openwrt
-          /github/workspace/$DIY_P2_SH
-        fi
-
-    - name: 下载软件包
-      id: download
-      working-directory: /workdir/openwrt
-      env:
-        CCACHE_DIR: /tmp/ccache
-      run: |
-        set -e
-        echo "生成默认配置..."
+        cp ../sl3000.config .config
         make defconfig
+        make download -j$(nproc)
         
-        echo "开始下载软件包..."
-        make download -j$(nproc) || make download -j2 || make download -j1
-        
-        # 清理无效的下载文件
-        echo "清理无效下载文件..."
-        find dl -size -1024c -delete 2>/dev/null || true
-        echo "软件包下载完成"
+        # 直接编译最终目标，依赖自动处理
+        make -j$(nproc) V=0
 
-    - name: 编译固件
-      id: compile
-      working-directory: /workdir/openwrt
-      env:
-        CCACHE_DIR: /tmp/ccache
-        CCACHE_MAXSIZE: 2G
-      run: |
-        set -e
-        echo "=== 编译环境 ==="
-        echo "CPU核心数: $(nproc)"
-        echo "CCACHE状态:"
-        ccache -s
-        
-        echo "开始编译固件..."
-        
-        # 编译策略：多线程 -> 单线程 -> 详细模式
-        if make -j$(nproc) ; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "result=多线程编译成功" >> $GITHUB_OUTPUT
-        elif make -j$(( $(nproc) / 2 )) ; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "result=半线程编译成功" >> $GITHUB_OUTPUT
-        elif make -j1 ; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "result=单线程编译成功" >> $GITHUB_OUTPUT
-        else
-          echo "尝试详细模式编译..."
-          make -j1 V=s
-          echo "status=failure" >> $GITHUB_OUTPUT
-          echo "result=编译失败" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        # 获取设备信息
-        if grep -q '^CONFIG_TARGET.*DEVICE.*=y' .config; then
-          DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/')
-          echo "DEVICE_NAME=_${DEVICE_NAME}" >> $GITHUB_ENV
-        else
-          echo "DEVICE_NAME=" >> $GITHUB_ENV
-        fi
-        
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        echo "编译完成时间: $(date)"
-
-    - name: 显示编译统计
-      if: always() && !cancelled()
-      run: |
-        echo "=== 编译缓存统计 ==="
-        ccache -s
-        echo "=== 磁盘使用情况 ==="
-        df -h
-        echo "=== 内存使用情况 ==="
-        free -h
-
-    - name: 整理固件文件
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
-      working-directory: /workdir/openwrt
-      run: |
-        # 进入固件目录
-        cd bin/targets/*/*
-        echo "固件目录: $PWD"
-        
-        # 清理不必要的文件
-        rm -rf packages
-        echo "保留的文件:"
-        ls -la
-        
-        # 计算文件大小
-        echo "固件文件大小:"
-        du -sh ./* || true
-        
-        # 设置环境变量
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: 上传固件制品
+    - name: 上传结果
       uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
       with:
-        name: OpenWrt_SL3000_EMMC${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}/*
-        retention-days: 7
-        compression-level: 0
-
-    - name: 生成发布信息
-      id: release_info
-      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
-      run: |
-        current_date=$(date +"%Y.%m.%d-%H%M")
-        echo "release_tag=sl3000-$current_date" >> $GITHUB_OUTPUT
-        echo "release_name=司络SL-3000 EMMC $current_date" >> $GITHUB_OUTPUT
-        
-        # 生成详细的发布说明
-        cat > release_body.md << EOF
-        # 司络SL-3000 EMMC 固件
-        
-        ## 编译信息
-        - **编译时间**: $(date)
-        - **设备型号**: SL-3000 (MT7981, EMMC)
-        - **编译结果**: ${{ steps.compile.outputs.result }}
-        - **源码版本**: ${{ env.REPO_BRANCH }}
-        - **编译环境**: GitHub Docker Container
-        
-        ## 固件特性
-        - 基于 ImmortalWrt MT798x 24.10 分支
-        - 专为司络SL-3000 EMMC版本优化
-        - 包含常用软件包和驱动
-        
-        ## 刷机说明
-        1. 请确保设备型号完全匹配
-        2. 建议首次刷机前备份原厂固件
-        3. 通过uboot或web界面刷入对应固件
-        
-        ## 注意事项
-        - 刷机有风险，请谨慎操作
-        - 建议在专业人士指导下进行
-        - 保留此固件文件以备恢复使用
-        
-        ## 文件列表
-        \`\`\`
-        $(ls -la ${{ env.FIRMWARE }} 2>/dev/null || echo "文件列表获取失败")
-        \`\`\`
-        EOF
-        
-        echo "body_file=release_body.md" >> $GITHUB_OUTPUT
-
-    - name: 发布到 GitHub Release
-      uses: softprops/action-gh-release@v2
-      if: steps.release_info.outputs.release_tag && !inputs.skip_upload
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.release_info.outputs.release_tag }}
-        name: ${{ steps.release_info.outputs.release_name }}
-        body_file: ${{ steps.release_info.outputs.body_file }}
-        files: ${{ env.FIRMWARE }}/*
-        draft: false
-        prerelease: false
-        generate_release_notes: false
-
-    - name: 清理工作空间
-      if: always()
-      run: |
-        echo "清理工作空间..."
-        rm -rf /workdir/openwrt/tmp /workdir/openwrt/staging_dir /workdir/openwrt/build_dir
-        df -h
-
-    - name: 清理旧发布
-      uses: dev-drprasad/delete-older-releases@v0.2.0
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled() && !inputs.skip_upload
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: 编译失败处理
-      if: steps.compile.outputs.status == 'failure'
-      run: |
-        echo "❌ 固件编译失败！"
-        echo "编译结果: ${{ steps.compile.outputs.result }}"
-        echo "请检查以下可能的原因:"
-        echo "1. 依赖包下载失败"
-        echo "2. 配置冲突"
-        echo "3. 源码版本问题"
-        echo "4. 内存或磁盘空间不足"
-        exit 1
+        name: Fast_Build_$(date +%s)
+        path: openwrt/bin/targets/**/*
