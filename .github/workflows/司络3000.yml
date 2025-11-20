@@ -4,7 +4,6 @@ on:
   repository_dispatch:
   workflow_dispatch:
 
-# 👇 必须添加这一段，确保 GITHUB_TOKEN 有权限创建 Release
 permissions:
   contents: write
 
@@ -26,16 +25,18 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@main
+      uses: actions/checkout@v3
 
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        # 清理预装环境释放空间
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        # 安装完整依赖（含 distutils/venv/setuptools/ncursesw/swig/seccomp）
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools python3-venv python3-distutils qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev libseccomp-dev
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
@@ -45,7 +46,7 @@ jobs:
     - name: Optimize Disk Space
       run: |
         echo "清理磁盘空间，释放编译环境容量..."
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo apt-get clean
         sudo apt-get autoremove --purge -y
@@ -55,15 +56,28 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load custom feeds
+    - name: Write feeds.conf.default (ensure required sources)
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        cat > openwrt/feeds.conf.default << 'EOF'
+        src-git packages https://github.com/immortalwrt/packages.git;master
+        src-git luci https://github.com/immortalwrt/luci.git;master
+        src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
+        src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+        # Passwall2/TurboACC/Cloudflared
+        src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
+        src-git sbwml https://github.com/sbwml/luci-app-turboacc.git;main
+        src-git cloudflared https://github.com/sbwml/luci-app-cloudflared.git;main
+        EOF
+
+    - name: Run DIY part1 (optional extra feeds/customizations)
+      run: |
+        if [ -f "$DIY_P1_SH" ]; then
+          chmod +x $DIY_P1_SH
+          cd openwrt && $GITHUB_WORKSPACE/$DIY_P1_SH
+        fi
 
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
@@ -73,19 +87,30 @@ jobs:
 
     - name: Load custom configuration
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        [ -d files ] && mv files openwrt/files
+        [ -f $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config || echo "WARN: $CONFIG_FILE not found, will use defconfig"
+        if [ -f "$DIY_P2_SH" ]; then
+          chmod +x $DIY_P2_SH
+          cd openwrt && $GITHUB_WORKSPACE/$DIY_P2_SH
+        fi
 
-    - name: Download package
-      id: package
+    - name: Finalize configuration (no menuconfig)
       run: |
         cd openwrt
-        make defconfig
+        if [ ! -f .config ]; then
+          make defconfig
+        fi
+        make olddefconfig
+        if ! grep -q '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config; then
+          echo "ERROR: SL-3000 EMMC device not selected in .config"
+          exit 1
+        fi
+        grep -E 'CONFIG_TARGET|CONFIG_PACKAGE_luci-app-passwall2|CONFIG_PACKAGE_luci-app-docker' .config || true
+
+    - name: Download package
+      run: |
+        cd openwrt
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
@@ -93,34 +118,32 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        set -o pipefail
+        if ! make -j"$(nproc)"; then
+          echo "Parallel build failed, retrying single-thread with verbose logs..."
+          make -j1 V=s
+        fi
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME || true
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV || echo "DEVICE_NAME=" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
 
     - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+        if [ -d openwrt/bin/targets ] && [ "$(find openwrt/bin/targets -type f | wc -l)" -gt 0 ]; then
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "ERROR: No firmware files found under openwrt/bin/targets"
+          exit 1
+        fi
 
     - name: Upload firmware directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v3
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
@@ -131,10 +154,11 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "司络SL-3000 EMMC 固件编译完成 ✅" >> release.txt
-        echo "编译时间: $(date)" >> release.txt
-        echo "设备: SL-3000 (MT7981, EMMC)" >> release.txt
+        {
+          echo "司络SL-3000 EMMC 固件编译完成 ✅"
+          echo "编译时间: $(date)"
+          echo "设备: SL-3000 (MT7981, EMMC)"
+        } > release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 发布固件至Release
@@ -145,20 +169,4 @@ jobs:
       with:
         files: ${{ env.FIRMWARE }}/*
         name: 司络SL-3000 EMMC${{ env.FILE_DATE }}
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        tag_name: ${{ steps.tag
