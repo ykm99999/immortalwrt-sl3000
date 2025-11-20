@@ -18,7 +18,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Initialization environment
       run: |
@@ -35,7 +35,6 @@ jobs:
     - name: Clone source code
       run: |
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf $GITHUB_WORKSPACE/openwrt openwrt
 
     - name: Write feeds.conf.default
       run: |
@@ -92,7 +91,7 @@ jobs:
         fi
 
     - name: Upload firmware
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: SL3000_firmware
         path: ${{ env.FIRMWARE }}
@@ -104,7 +103,7 @@ jobs:
       with:
         files: ${{ env.FIRMWARE }}/*
         name: 司络SL-3000 EMMC
-        tag_name: $(date +"%Y.%m.%d-%H%M")
+        tag_name: ${{ github.run_id }}
         body: |
           司络SL-3000 EMMC 固件编译完成 ✅
           编译时间: $(date)
