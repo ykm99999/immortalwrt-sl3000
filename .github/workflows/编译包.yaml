@@ -1,49 +1,43 @@
-name: Build ImmortalWrt for SL-3000
+name: Build Core Packages Only
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout this repo
-      uses: actions/checkout@v3
+    - name: Checkout
+      uses: actions/checkout@v4
 
-    - name: Free disk space
+    - name: Setup environment
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm
-        sudo docker image prune --all --force
-        sudo apt-get clean
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake git libssl-dev
 
-    - name: Build Docker image
-      run: docker build -t immortalwrt-builder .
-
-    - name: Compile firmware in stages
+    - name: Clone and setup
       run: |
-        docker run --rm -e TERM=xterm-256color -v ${{ github.workspace }}:/builder immortalwrt-builder bash -c "
-          set -e
-          cd /builder
-          git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git
-          cd immortalwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          if [ -f /builder/sl3000.config ]; then
-            cp /builder/sl3000.config .config
-          else
-            make defconfig
-          fi
-          make olddefconfig
-          make tools/install -j1 V=s
-          make toolchain/install -j1 V=s
-          make target/compile -j1 V=s
-          make package/compile -j1 V=s
-          make -j$(nproc) V=s
-        "
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 immortalwrt
+        cd immortalwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        # 最小配置
+        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
+        make defconfig
 
-    - name: Upload firmware
+    - name: Build core packages
+      working-directory: immortalwrt
+      run: |
+        # 只编译核心包
+        make package/luci-app-docker/compile V=s
+        make package/luci-app-passwall2/compile V=s
+        make package/dockerd/compile V=s
+        make package/xray-core/compile V=s
+
+    - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: SL3000_firmware
-        path: immortalwrt/bin/targets
+        name: Core-Packages
+        path: immortalwrt/bin/packages/**/*.ipk
+        retention-days: 30
