@@ -1,4 +1,4 @@
-name: Build Core Packages Only
+name: Build MT7981 Packages Stable
 
 on:
   workflow_dispatch:
@@ -16,28 +16,35 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential cmake git libssl-dev
 
-    - name: Clone and setup
+    - name: Clone source
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 immortalwrt
-        cd immortalwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        # 最小配置
-        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
-        make defconfig
 
-    - name: Build core packages
+    - name: Configure for MT7981
       working-directory: immortalwrt
       run: |
-        # 只编译核心包
-        make package/luci-app-docker/compile V=s
-        make package/luci-app-passwall2/compile V=s
-        make package/dockerd/compile V=s
-        make package/xray-core/compile V=s
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 使用预编译的工具链，避免编译工具链
+        cat > .config << 'EOF'
+CONFIG_TARGET_mediatek_mt7981=y
+CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y
+CONFIG_PACKAGE_luci-app-docker=y
+CONFIG_PACKAGE_luci-app-passwall2=y
+EOF
+        
+        make defconfig
+
+    - name: Build with prebuilt toolchain
+      working-directory: immortalwrt
+      run: |
+        # 只编译用户空间包，使用预编译工具链
+        make package/luci-app-docker/compile V=s -j1
+        make package/luci-app-passwall2/compile V=s -j1
 
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:
-        name: Core-Packages
+        name: MT7981-User-Packages
         path: immortalwrt/bin/packages/**/*.ipk
-        retention-days: 30
