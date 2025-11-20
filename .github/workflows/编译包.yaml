@@ -1,4 +1,4 @@
-name: Build Docker and Passwall2 for MT7981
+name: Build Packages for SL3000
 
 on:
   workflow_dispatch:
@@ -6,99 +6,40 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Setup build environment
+    - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential ccache cmake git \
-          libssl-dev libncurses5-dev flex bison \
-          python3 python3-pip unzip gawk
+        sudo apt-get install -y build-essential cmake git libssl-dev
 
-    - name: Clone ImmortalWrt source
+    - name: Clone source
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 immortalwrt
 
-    - name: Setup correct architecture
+    - name: Setup environment
       working-directory: immortalwrt
       run: |
-        # 更新feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-        # 创建正确的 MT7981 配置
-        cat > .config << 'EOF'
-CONFIG_TARGET_mediatek=y
-CONFIG_TARGET_mediatek_mt7981=y
-CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y
-CONFIG_PACKAGE_luci-app-docker=y
-CONFIG_PACKAGE_dockerd=y
-CONFIG_PACKAGE_docker=y
-CONFIG_PACKAGE_containerd=y
-CONFIG_PACKAGE_luci-app-passwall2=y
-CONFIG_PACKAGE_xray-core=y
-CONFIG_PACKAGE_v2ray-core=y
-CONFIG_PACKAGE_sing-box=y
-CONFIG_PACKAGE_dns2socks=y
-CONFIG_PACKAGE_ipt2socks=y
-CONFIG_PACKAGE_chinadns-ng=y
-CONFIG_PACKAGE_microsocks=y
-CONFIG_PACKAGE_simple-obfs=y
-CONFIG_PACKAGE_kmod-veth=y
-CONFIG_PACKAGE_kmod-bridge=y
-CONFIG_PACKAGE_kmod-overlay=y
-EOF
-        
-        # 生成完整配置
+        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
+        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-docker=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-passwall2=y" >> .config
         make defconfig
-        echo "=== 当前架构配置 ==="
-        grep "CONFIG_TARGET" .config
 
-    - name: Download dependencies
+    - name: Build packages
       working-directory: immortalwrt
       run: |
-        echo "下载依赖包..."
-        make download -j$(nproc)
+        make download -j2
+        make package/luci-app-docker/compile -j2 V=s
+        make package/luci-app-passwall2/compile -j2 V=s
 
-    - name: Build toolchain first
-      working-directory: immortalwrt
-      run: |
-        echo "=== 先编译工具链 ==="
-        make toolchain/install -j$(nproc) V=0
-
-    - name: Build Docker packages
-      working-directory: immortalwrt
-      run: |
-        echo "=== 编译 Docker 套件 ==="
-        make package/luci-app-docker/compile -j$(nproc) V=0
-        make package/dockerd/compile -j$(nproc) V=0
-        make package/docker/compile -j$(nproc) V=0
-        make package/containerd/compile -j$(nproc) V=0
-
-    - name: Build Passwall2 packages
-      working-directory: immortalwrt
-      run: |
-        echo "=== 编译 Passwall2 套件 ==="
-        make package/luci-app-passwall2/compile -j$(nproc) V=0
-        make package/xray-core/compile -j$(nproc) V=0
-        make package/v2ray-core/compile -j$(nproc) V=0
-        make package/sing-box/compile -j$(nproc) V=0
-
-    - name: List compiled packages
-      run: |
-        echo "=== 编译完成的软件包 ==="
-        find immortalwrt/bin -name "*.ipk" -type f | sort
-        echo "=== 包数量统计 ==="
-        find immortalwrt/bin -name "*.ipk" | wc -l
-
-    - name: Upload Packages
+    - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: MT7981-Packages
+        name: SL3000-Packages
         path: immortalwrt/bin/packages/**/*.ipk
-        retention-days: 30
