@@ -25,7 +25,7 @@ jobs:
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install build-essential git wget curl unzip rsync file \
-          python3 python3-pip python3-setuptools python3-venv python3-distutils \
+          python3 python3-pip python3-setuptools python3-venv \
           libncurses5-dev libncursesw5-dev swig libseccomp-dev gawk flex gettext \
           libssl-dev zlib1g-dev
         sudo apt-get clean
@@ -33,7 +33,8 @@ jobs:
 
     - name: "Clone source code"
       run: |
-        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        git clone --depth=1 "$REPO_URL" -b "$REPO_BRANCH" openwrt
+        test -f openwrt/include/toplevel.mk || { echo "ERROR: source clone failed"; exit 1; }
 
     - name: "Write feeds.conf.default"
       run: |
@@ -51,18 +52,22 @@ jobs:
         mkdir -p openwrt/package/community
         git clone --depth=1 https://github.com/chenmozhijin/turboacc.git /tmp/turboacc
         cp -r /tmp/turboacc/luci-app-turboacc openwrt/package/community/luci-app-turboacc
-        ls -la openwrt/package/community
+        test -d openwrt/package/community/luci-app-turboacc || { echo "ERROR: TurboACC vendor failed"; exit 1; }
 
     - name: "Update feeds"
-      run: cd openwrt && ./scripts/feeds update -a
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
 
     - name: "Install feeds"
-      run: cd openwrt && ./scripts/feeds install -a
+      run: |
+        cd openwrt
+        ./scripts/feeds install -a
 
     - name: "Preflight scan deprecated deps"
       run: |
         cd openwrt
-        (grep -R --line-number -E 'libcrypt-compat|libxcrypt|libpcre|kmod-usb-gadget-ncm|kmod-crypto-chacha20poly1305|python3-distutils' package/feeds || true) | tee ../deprecated_deps_scan.txt
+        (grep -R --line-number -E 'libcrypt-compat|libxcrypt|libpcre|kmod-usb-gadget-ncm|kmod-crypto-chacha20poly1305|python3-distutils|python3-light|python3-urllib|python3-email|python3-uuid|python3-logging|python3-multiprocessing|python3-pydoc' package/feeds || true) | tee ../deprecated_deps_scan.txt
 
     - name: "Upload preflight scan"
       uses: actions/upload-artifact@v4
@@ -70,26 +75,27 @@ jobs:
         name: "preflight_scan"
         path: "deprecated_deps_scan.txt"
 
-    - name: "Clean broken packages (comprehensive)"
+    - name: "Comprehensive clean: broken and Python packages"
       run: |
-        # packages feed
         cd openwrt/package/feeds/packages
-        rm -rf ovpn-dco strongswan usbgadget sudo tac_plus tcsh ufp uw-imap xinetd xupnpd perl || true
-        rm -rf python3 python-babel python-docker python-incremental || true
-        rm -rf rtty samba4 screen shadow squid stress-ng || true
-        # telephony feed
+        # 已知旧依赖包
+        rm -rf ovpn-dco strongswan usbgadget sudo tac_plus tcsh ufp uw-imap xinetd xupnpd perl rtty samba4 screen shadow squid stress-ng || true
+        # Python 全生态（避免解析到不存在的 python3-* 拆分）
+        ls -1 | grep -E '^python' | xargs -I{} rm -rf "{}" || true
+        # telephony 旧依赖
         cd ../telephony
         rm -rf rtpengine sipgrep || true
 
     - name: "Copy config & defconfig"
       run: |
-        [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config || echo "No $CONFIG_FILE found!"
+        [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" openwrt/.config || echo "WARNING: no $CONFIG_FILE, will use defaults"
         cd openwrt
+        test -f include/toplevel.mk || { echo "ERROR: not in openwrt top-level"; exit 1; }
         make defconfig
         echo "==== Target check ===="
-        grep -E 'CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: SL-3000 EMMC not selected in .config"; exit 1; }
-        echo "==== Bad selections check ===="
-        (grep -E 'CONFIG_PACKAGE_(ovpn-dco|strongswan|usbgadget|sudo|tac_plus|tcsh|ufp|uw-imap|xinetd|xupnpd|perl|python3|python-babel|python-docker|python-incremental|rtty|samba4|screen|shadow|squid|stress-ng|rtpengine|sipgrep)=y' .config || true) | tee ../bad_selections.txt
+        grep -E '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: SL-3000 EMMC not selected"; exit 1; }
+        echo "==== Bad selections check (Python & deprecated) ===="
+        (grep -E 'CONFIG_PACKAGE_(ovpn-dco|strongswan|usbgadget|sudo|tac_plus|tcsh|ufp|uw-imap|xinetd|xupnpd|perl|rtty|samba4|screen|shadow|squid|stress-ng|rtpengine|sipgrep|python.*)=y' .config || true) | tee ../bad_selections.txt
 
     - name: "Upload bad selections"
       uses: actions/upload-artifact@v4
@@ -97,22 +103,11 @@ jobs:
         name: "bad_selections"
         path: "bad_selections.txt"
 
-    - name: "Olddefconfig (verbose single-thread)"
+    - name: "Proceed only with defconfig (remove olddefconfig)"
       run: |
         cd openwrt
-        set -o pipefail
-        if ! make -j1 V=s olddefconfig; then
-          echo "olddefconfig failed; saving .config"
-          cp .config ../.config_failed || true
-          exit 1
-        fi
-
-    - name: "Upload config on failure"
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: "config_failed"
-        path: ".config_failed"
+        # 用 defconfig 即可，不再调用 olddefconfig（该源不支持）
+        echo "Defconfig complete."
 
     - name: "Download packages"
       run: |
@@ -133,7 +128,7 @@ jobs:
         if [ -d openwrt/bin/targets ] && [ "$(find openwrt/bin/targets -type f | wc -l)" -gt 0 ]; then
           cd openwrt/bin/targets/*/*
           rm -rf packages
-          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
         else
           echo "ERROR: No firmware files found"
           exit 1
