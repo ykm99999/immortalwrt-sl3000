@@ -2,95 +2,175 @@ name: SL-3000 极速编译
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CCACHE_DIR: /tmp/ccache
+  DL_DIR: /tmp/dl
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120  # 增加超时时间
 
     steps:
     - name: 检查代码和配置
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 1  # 浅层克隆，加快速度
       
     - name: 验证配置文件
       run: |
         echo "=== 检查配置文件 ==="
-        if [ -f "sl3000.config" ]; then
-          echo "找到配置文件"
-          # 检查关键配置
-          grep -E "CONFIG_TARGET|DEVICE_sl_3000" sl3000.config || echo "警告：未找到设备配置"
-        else
-          echo "错误：未找到 sl3000.config"
+        if [ ! -f "sl3000.config" ]; then
+          echo "❌ 错误：未找到 sl3000.config 配置文件"
           exit 1
         fi
+        
+        echo "✅ 找到配置文件"
+        echo "=== 关键配置检查 ==="
+        grep -E "CONFIG_TARGET_.*=y|DEVICE_.*=y" sl3000.config || echo "⚠️  警告：设备配置可能不完整"
+        echo "=== 架构信息 ==="
+        grep "CONFIG_TARGET_ARCH_PACKAGES" sl3000.config || echo "未找到架构信息"
 
-    - name: 缓存优化
+    - name: 设置缓存
       uses: actions/cache@v3
       with:
         path: |
           ~/.ccache
-          openwrt/dl
-          openwrt/staging_dir
-        key: ${{ runner.os }}-fast-${{ hashFiles('sl3000.config') }}
+          /tmp/dl
+          /tmp/ccache
+        key: ${{ runner.os }}-sl3000-${{ hashFiles('sl3000.config') }}-v3
         restore-keys: |
-          ${{ runner.os }}-fast-
+          ${{ runner.os }}-sl3000-${{ hashFiles('sl3000.config') }}-
+          ${{ runner.os }}-sl3000-
 
     - name: 环境准备
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential ccache cmake git \
-          libssl-dev libncurses5-dev \
-          python3 python3-pip unzip
+          libssl-dev libncurses5-dev zlib1g-dev \
+          gawk gettext unzip python3 python3-pip \
+          rsync subversion swig file time
+        
+        # 设置ccache
+        ccache -o compression=true
+        ccache -o max_size=2G
+        ccache -s
 
-    - name: 快速编译
+    - name: 准备编译环境
       run: |
         set -e
-        echo "开始编译..."
-        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 openwrt
+        echo "=== 克隆代码库 ==="
+        git clone --depth=1 --branch=2410 \
+          https://github.com/padavanonly/immortalwrt-mt798x-24.10 \
+          openwrt
+          
         cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        
+        echo "=== 应用配置 ==="
         cp ../sl3000.config .config
         make defconfig
         
-        # 显示目标设备确认
         echo "=== 目标设备确认 ==="
-        grep -E "TARGET.*DEVICE" .config || echo "未找到设备配置"
+        echo "架构: $(grep 'CONFIG_TARGET_ARCH_PACKAGES' .config | head -1)"
+        echo "设备: $(grep 'CONFIG_TARGET_DEVICE' .config | head -1)"
+        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config | head -1)"
+
+    - name: 并行下载资源
+      run: |
+        cd openwrt
+        echo "=== 开始下载资源 ==="
+        # 使用更多并行任务下载
+        make -j8 download || make -j4 download || make -j2 download
         
-        make download -j$(nproc)
-        make -j$(nproc) V=0
+        echo "=== 下载完成，检查文件 ==="
+        find dl -name "*.zip" -o -name "*.tar.*" | wc -l | xargs echo "下载文件数量:"
+
+    - name: 分阶段编译
+      run: |
+        cd openwrt
+        set -e
+        
+        echo "=== 阶段1: 编译工具链 ==="
+        time make -j$(nproc) tools/compile || make -j2 tools/compile
+        
+        echo "=== 阶段2: 编译工具 ==="
+        time make -j$(nproc) toolchain/compile || make -j2 toolchain/compile
+        
+        echo "=== 阶段3: 编译目标文件 ==="
+        time make -j$(nproc) target/compile || make -j2 target/compile
+        
+        echo "=== 阶段4: 编译软件包 ==="
+        time make -j$(nproc) package/compile || make -j2 package/compile
+        
+        echo "=== 阶段5: 最终打包 ==="
+        time make -j$(nproc) package/index || make -j2 package/index
+        time make -j$(nproc) || make -j2 V=0
 
     - name: 检查编译结果
       id: check_build
       run: |
         echo "=== 检查编译输出 ==="
-        if find openwrt/bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
-          echo "找到固件文件:"
-          find openwrt/bin/targets -name "*.bin" -o -name "*.img"
+        cd openwrt
+        
+        # 查找所有可能的固件文件
+        FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | head -10)
+        
+        if [ -n "$FIRMWARE_FILES" ]; then
+          echo "✅ 找到固件文件:"
+          echo "$FIRMWARE_FILES"
+          echo "固件数量: $(echo "$FIRMWARE_FILES" | wc -l)"
           echo "status=success" >> $GITHUB_OUTPUT
+          echo "files=$FIRMWARE_FILES" >> $GITHUB_OUTPUT
         else
-          echo "未找到固件文件"
+          echo "❌ 未找到固件文件"
           echo "=== 目录结构 ==="
-          find openwrt/bin -type d | head -10
+          find bin -type d 2>/dev/null | head -20
           echo "status=failure" >> $GITHUB_OUTPUT
         fi
+
+    - name: 显示编译统计
+      if: always()
+      run: |
+        echo "=== 编译统计 ==="
+        ccache -s 2>/dev/null || echo "ccache 统计不可用"
+        echo "磁盘使用情况:"
+        df -h | grep -v snap
+        echo "内存使用情况:"
+        free -h
 
     - name: 上传固件
       if: steps.check_build.outputs.status == 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: SL3000_Firmware_$(date +%Y%m%d_%H%M)
+        name: SL3000_固件_$(date +%Y%m%d_%H%M%S)
         path: |
           openwrt/bin/targets/**/*.bin
           openwrt/bin/targets/**/*.img
-        retention-days: 30
+          openwrt/bin/targets/**/*.gz
+        retention-days: 7
+        compression-level: 0  # 不压缩，加快上传
 
     - name: 编译失败诊断
       if: steps.check_build.outputs.status == 'failure'
       run: |
         echo "❌ 编译失败诊断"
-        echo "1. 检查配置文件:"
-        grep -E "TARGET|DEVICE" openwrt/.config 2>/dev/null || echo "无法读取配置"
-        echo "2. 检查编译日志:"
-        ls -la openwrt/logs/ 2>/dev/null || echo "无日志目录"
+        cd openwrt
+        
+        echo "1. 配置文件状态:"
+        [ -f ".config" ] && echo "✅ .config 存在" || echo "❌ .config 不存在"
+        
+        echo "2. 关键配置检查:"
+        grep -E "TARGET_ARCH|TARGET_DEVICE|TARGET_SUBTARGET" .config 2>/dev/null || echo "无法读取配置"
+        
+        echo "3. 目录结构:"
+        ls -la bin/ 2>/dev/null || echo "bin 目录不存在"
+        find . -name "logs" -type d 2>/dev/null | head -5
+        
+        echo "4. 可能的错误文件:"
+        find . -name "*.log" -o -name "error*" 2>/dev/null | head -10
