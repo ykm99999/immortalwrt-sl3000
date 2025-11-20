@@ -1,11 +1,18 @@
-name: "SL3000 测试"
+- name: Clone source code
+        run: git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 openwrt
 
-on:
-  workflow_dispatch:
+      - name: Write feeds.conf.default
+        run: |
+          cat > openwrt/feeds.conf.default << 'EOF'
+          src-git packages https://github.com/immortalwrt/packages.git;master
+          src-git luci https://github.com/immortalwrt/luci.git;master
+          src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
+          src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+          src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
+          EOF
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Echo Hello
-        run: echo "Hello SL3000"
+      - name: Update & install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
