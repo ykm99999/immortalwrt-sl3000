@@ -34,23 +34,20 @@ jobs:
           libssl-dev zlib1g-dev software-properties-common lsb-release \
           ninja-build pkg-config meson
 
-        # 移除旧 cmake，安装 kitware cmake（通常为 3.31+）
+        # 安装 CMake 3.31+（Kitware）并用 pip 双保险
         sudo apt-get remove -y cmake || true
         sudo apt-add-repository -y 'deb https://apt.kitware.com/ubuntu/ jammy main'
         wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
         sudo apt-get update
         sudo apt-get install -y cmake || true
 
-        # pip 安装最新 cmake，并前置 PATH（双保险）
         python3 -m pip install --upgrade --user cmake
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$GITHUB_ENV"
         export PATH="$HOME/.local/bin:$PATH"
 
-        echo "=== Host tool versions ==="
         cmake --version
         ninja --version || true
         meson --version || true
-        gcc --version | head -n1
 
     - name: Clone source code
       shell: bash
@@ -87,26 +84,50 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Deep clean packages with Python/Rust/Perl deps
+    - name: Deep clean (existence-safe)
       shell: bash
       run: |
         set -eux
-        cd openwrt/package/feeds/packages
-        # Python 家族和依赖它的包
-        rm -rf \
-          speedtest-cli supervisor tdb text-unidecode tunneldigger-broker \
-          unbound uwsgi vectorscan vobject wakeonlan whois xtables-addons \
-          ykdl you-get yt-dlp || true
-        ls -1 | grep -E '^python' | xargs -I{} rm -rf "{}" || true
-        # Rust 家族和依赖它的包
-        rm -rf rust spotifyd yggdrasil-jumper tuic-client tuic-server || true
-        # Perl 依赖的包
-        rm -rf perl perl* || true
-        # 内核/模块异常依赖
-        cd ../../utils
-        rm -rf usbgadget || true
-        cd ../telephony
-        rm -rf yate || true
+        # 仅当目录存在时才进入
+        if [ -d openwrt/package/feeds/packages ]; then
+          cd openwrt/package/feeds/packages
+          # 移除依赖 Python/Rust/Perl 的包（避免 "does not exist"）
+          for d in speedtest-cli supervisor tdb text-unidecode tunneldigger-broker \
+                   unbound uwsgi vectorscan vobject wakeonlan whois xtables-addons \
+                   ykdl you-get yt-dlp spotifyd yggdrasil-jumper tuic-client tuic-server; do
+            [ -d "$d" ] && rm -rf "$d"
+          done
+          # 扫描并删掉所有 python* 包目录
+          for p in $(ls -1 | grep -E '^python' || true); do
+            [ -d "$p" ] && rm -rf "$p"
+          done
+          # Perl 相关
+          for p in perl perl-ack perl-authen-sasl perl-authen-sasl-xs perl-cgi perl-class-inspector perl-clone \
+                   perl-compress-bzip2 perl-dbi perl-device-serialport perl-device-usb perl-encode-locale \
+                   perl-file-listing perl-file-next perl-file-rsyncp perl-file-sharedir perl-file-sharedir-install \
+                   perl-future perl-future-asyncawait perl-html-form perl-html-parser perl-html-tagset perl-html-tree \
+                   perl-http-cookies perl-http-daemon perl-http-date perl-http-message perl-http-negotiate \
+                   perl-http-server-simple perl-inline perl-inline-c perl-io-async perl-io-async-ssl perl-io-html \
+                   perl-io-socket-ssl perl-lockfile-simple perl-lwp-mediatypes perl-lwp-protocol-https \
+                   perl-mail-spamassassin perl-metrics-any perl-net-async-http perl-net-cidr-lite perl-net-dns \
+                   perl-net-dns-sec perl-net-http perl-net-ssleay perl-net-telnet perl-netaddr-ip perl-parse-recdescent \
+                   perl-parse-yapp perl-struct-dumb perl-sub-uplevel perl-test-harness perl-test-warn perl-text-csv_xs \
+                   perl-time-moment perl-try-tiny perl-uri perl-www perl-www-curl perl-www-mech; do
+            [ -d "$p" ] && rm -rf "$p"
+          done
+        fi
+
+        # utils/usbgadget 存在才删
+        if [ -d openwrt/package/utils/usbgadget ]; then
+          rm -rf openwrt/package/utils/usbgadget
+        fi
+
+        # telephony 目录存在才删 yate
+        if [ -d openwrt/package/feeds/telephony ]; then
+          if [ -d openwrt/package/feeds/telephony/yate ]; then
+            rm -rf openwrt/package/feeds/telephony/yate
+          fi
+        fi
 
     - name: Prepare .config
       shell: bash
@@ -117,20 +138,23 @@ jobs:
         make defconfig
         grep -E '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: target not selected"; exit 1; }
 
-    - name: Build full host tools (then override cmake to 3.31+)
+    - name: Build full host tools (then override cmake to 3.31+ and PATH)
       shell: bash
       run: |
         set -eux
         cd openwrt
-        # 先完整安装 tools，避免 tools/cmake/install 在并行阶段出错
+        # tools 阶段先完整安装，再覆盖 cmake
         make tools/install -j1 V=s
+
         host_bin="$PWD/staging_dir/host/bin"
         mkdir -p "$host_bin"
         sys_cmake="$(command -v cmake)"
         test -x "$sys_cmake" || { echo "ERROR: system cmake not found"; exit 1; }
         ln -sf "$sys_cmake" "$host_bin/cmake"
-        echo "Using host cmake: $(readlink -f "$host_bin/cmake")"
         "$host_bin/cmake" --version
+
+        # 确保后续统一优先使用 host/bin 的 cmake
+        echo "export PATH=\"$host_bin:\$PATH\"" >> "$GITHUB_ENV"
 
     - name: Download packages
       shell: bash
