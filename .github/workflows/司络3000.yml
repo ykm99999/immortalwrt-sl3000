@@ -44,9 +44,14 @@ jobs:
         src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
-        src-git sbwml https://github.com/sbwml/luci-app-turboacc.git;main
-        src-git cloudflared https://github.com/sbwml/luci-app-cloudflared.git;main
         EOF
+
+    - name: Vendor third-party packages (TurboACC + Cloudflared)
+      run: |
+        mkdir -p openwrt/package/community
+        git clone --depth=1 https://github.com/sbwml/luci-app-turboacc.git openwrt/package/community/luci-app-turboacc
+        git clone --depth=1 https://github.com/sbwml/luci-app-cloudflared.git openwrt/package/community/luci-app-cloudflared
+        ls -la openwrt/package/community
 
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
@@ -64,6 +69,8 @@ jobs:
           echo "ERROR: SL-3000 EMMC not selected"
           exit 1
         fi
+        test -d package/community/luci-app-turboacc || { echo "Missing luci-app-turboacc"; exit 1; }
+        test -d package/community/luci-app-cloudflared || { echo "Missing luci-app-cloudflared"; exit 1; }
 
     - name: Download package
       run: |
