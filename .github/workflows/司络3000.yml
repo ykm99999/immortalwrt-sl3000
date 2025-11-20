@@ -15,7 +15,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -46,11 +45,11 @@ jobs:
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
         EOF
 
-    - name: Vendor third-party packages (TurboACC + Cloudflared)
+    - name: Vendor TurboACC (chenmozhijin/turboacc)
       run: |
         mkdir -p openwrt/package/community
-        git clone --depth=1 https://github.com/sbwml/luci-app-turboacc.git openwrt/package/community/luci-app-turboacc
-        git clone --depth=1 https://github.com/sbwml/luci-app-cloudflared.git openwrt/package/community/luci-app-cloudflared
+        git clone --depth=1 https://github.com/chenmozhijin/turboacc.git /tmp/turboacc
+        cp -r /tmp/turboacc/luci-app-turboacc openwrt/package/community/luci-app-turboacc
         ls -la openwrt/package/community
 
     - name: Update feeds
@@ -70,7 +69,6 @@ jobs:
           exit 1
         fi
         test -d package/community/luci-app-turboacc || { echo "Missing luci-app-turboacc"; exit 1; }
-        test -d package/community/luci-app-cloudflared || { echo "Missing luci-app-cloudflared"; exit 1; }
 
     - name: Download package
       run: |
