@@ -1,8 +1,5 @@
-# 官方基础包源
 src-git packages https://github.com/immortalwrt/packages.git;master
 src-git luci https://github.com/immortalwrt/luci.git;master
 src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
 src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
-
-# 第三方扩展
 src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
