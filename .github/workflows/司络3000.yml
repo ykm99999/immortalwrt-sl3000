@@ -61,7 +61,9 @@ jobs:
     - name: Clean broken packages
       run: |
         cd openwrt/package/feeds/packages
-        rm -rf strongswan sudo tac_plus tcsh ufp usbgadget uw-imap xinetd xupnpd || true
+        rm -rf rtty samba4 screen shadow squid stress-ng usbgadget || true
+        cd ../telephony
+        rm -rf sipgrep || true
 
     - name: Load custom configuration
       run: |
