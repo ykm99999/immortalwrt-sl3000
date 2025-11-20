@@ -6,11 +6,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
-    - name: 检查代码
+    - name: 检查代码和配置
       uses: actions/checkout@v4
+      
+    - name: 验证配置文件
+      run: |
+        echo "=== 检查配置文件 ==="
+        if [ -f "sl3000.config" ]; then
+          echo "找到配置文件"
+          # 检查关键配置
+          grep -E "CONFIG_TARGET|DEVICE_sl_3000" sl3000.config || echo "警告：未找到设备配置"
+        else
+          echo "错误：未找到 sl3000.config"
+          exit 1
+        fi
 
     - name: 缓存优化
       uses: actions/cache@v3
@@ -20,28 +32,65 @@ jobs:
           openwrt/dl
           openwrt/staging_dir
         key: ${{ runner.os }}-fast-${{ hashFiles('sl3000.config') }}
+        restore-keys: |
+          ${{ runner.os }}-fast-
 
     - name: 环境准备
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential ccache cmake git libssl-dev
+        sudo apt-get install -y \
+          build-essential ccache cmake git \
+          libssl-dev libncurses5-dev \
+          python3 python3-pip unzip
 
     - name: 快速编译
       run: |
-        # 一键式编译脚本
+        set -e
+        echo "开始编译..."
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 -b 2410 openwrt
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         cp ../sl3000.config .config
         make defconfig
-        make download -j$(nproc)
         
-        # 直接编译最终目标，依赖自动处理
+        # 显示目标设备确认
+        echo "=== 目标设备确认 ==="
+        grep -E "TARGET.*DEVICE" .config || echo "未找到设备配置"
+        
+        make download -j$(nproc)
         make -j$(nproc) V=0
 
-    - name: 上传结果
+    - name: 检查编译结果
+      id: check_build
+      run: |
+        echo "=== 检查编译输出 ==="
+        if find openwrt/bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
+          echo "找到固件文件:"
+          find openwrt/bin/targets -name "*.bin" -o -name "*.img"
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "未找到固件文件"
+          echo "=== 目录结构 ==="
+          find openwrt/bin -type d | head -10
+          echo "status=failure" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 上传固件
+      if: steps.check_build.outputs.status == 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: Fast_Build_$(date +%s)
-        path: openwrt/bin/targets/**/*
+        name: SL3000_Firmware_$(date +%Y%m%d_%H%M)
+        path: |
+          openwrt/bin/targets/**/*.bin
+          openwrt/bin/targets/**/*.img
+        retention-days: 30
+
+    - name: 编译失败诊断
+      if: steps.check_build.outputs.status == 'failure'
+      run: |
+        echo "❌ 编译失败诊断"
+        echo "1. 检查配置文件:"
+        grep -E "TARGET|DEVICE" openwrt/.config 2>/dev/null || echo "无法读取配置"
+        echo "2. 检查编译日志:"
+        ls -la openwrt/logs/ 2>/dev/null || echo "无日志目录"
