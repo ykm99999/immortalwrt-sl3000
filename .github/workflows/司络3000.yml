@@ -34,22 +34,22 @@ jobs:
           libssl-dev zlib1g-dev software-properties-common lsb-release \
           ninja-build pkg-config meson
 
-        # 移除系统旧 cmake，安装 kitware cmake（通常为 3.31+）
+        # 移除旧 cmake，安装 kitware cmake（通常为 3.31+）
         sudo apt-get remove -y cmake || true
         sudo apt-add-repository -y 'deb https://apt.kitware.com/ubuntu/ jammy main'
         wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
         sudo apt-get update
         sudo apt-get install -y cmake || true
 
-        # pip 安装最新 cmake 并前置 PATH（双保险）
+        # pip 安装最新 cmake，并前置 PATH（双保险）
         python3 -m pip install --upgrade --user cmake
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$GITHUB_ENV"
         export PATH="$HOME/.local/bin:$PATH"
 
         echo "=== Host tool versions ==="
         cmake --version
-        meson --version || true
         ninja --version || true
+        meson --version || true
         gcc --version | head -n1
 
     - name: Clone source code
@@ -70,7 +70,6 @@ jobs:
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
         EOF
-        cat openwrt/feeds.conf.default
 
     - name: Vendor TurboACC
       shell: bash
@@ -79,7 +78,6 @@ jobs:
         mkdir -p openwrt/package/community
         git clone --depth=1 https://github.com/chenmozhijin/turboacc.git /tmp/turboacc
         cp -r /tmp/turboacc/luci-app-turboacc openwrt/package/community/luci-app-turboacc
-        test -d openwrt/package/community/luci-app-turboacc || { echo "ERROR: TurboACC vendor failed"; exit 1; }
 
     - name: Update & install feeds
       shell: bash
@@ -89,16 +87,26 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Clean legacy, Python, Rust
+    - name: Deep clean packages with Python/Rust/Perl deps
       shell: bash
       run: |
         set -eux
         cd openwrt/package/feeds/packages
-        rm -rf rtty samba4 screen shadow squid stress-ng usbgadget sudo tac_plus tcsh uw-imap xinetd xupnpd perl ovpn-dco strongswan ufp || true
+        # Python 家族和依赖它的包
+        rm -rf \
+          speedtest-cli supervisor tdb text-unidecode tunneldigger-broker \
+          unbound uwsgi vectorscan vobject wakeonlan whois xtables-addons \
+          ykdl you-get yt-dlp || true
         ls -1 | grep -E '^python' | xargs -I{} rm -rf "{}" || true
-        rm -rf rust || true
+        # Rust 家族和依赖它的包
+        rm -rf rust spotifyd yggdrasil-jumper tuic-client tuic-server || true
+        # Perl 依赖的包
+        rm -rf perl perl* || true
+        # 内核/模块异常依赖
+        cd ../../utils
+        rm -rf usbgadget || true
         cd ../telephony
-        rm -rf sipgrep rtpengine || true
+        rm -rf yate || true
 
     - name: Prepare .config
       shell: bash
@@ -109,14 +117,13 @@ jobs:
         make defconfig
         grep -E '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: target not selected"; exit 1; }
 
-    - name: Build host tools (cmake) and force-override to 3.31+
+    - name: Build full host tools (then override cmake to 3.31+)
       shell: bash
       run: |
         set -eux
         cd openwrt
-        # 先让 OpenWrt 安装它的 cmake 到 staging_dir/host/bin
-        make tools/cmake/install -j"$(nproc)"
-        # 用我们安装的新版 cmake 强制替换（软链接），确保后续包用的是 3.31+
+        # 先完整安装 tools，避免 tools/cmake/install 在并行阶段出错
+        make tools/install -j1 V=s
         host_bin="$PWD/staging_dir/host/bin"
         mkdir -p "$host_bin"
         sys_cmake="$(command -v cmake)"
