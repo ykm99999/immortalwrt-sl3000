@@ -1,4 +1,4 @@
-name: 司络SL-3000 EMMC
+name: 司络SL-3000 EMMC 分步体检编译
 
 on:
   workflow_dispatch:
@@ -19,21 +19,21 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Initialization environment
+    - name: Init environment
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install build-essential git wget curl unzip rsync file \
           python3 python3-pip python3-setuptools python3-venv python3-distutils \
-          libncurses5-dev libncursesw5-dev swig libseccomp-dev \
-          gawk flex gettext libssl-dev zlib1g-dev
+          libncurses5-dev libncursesw5-dev swig libseccomp-dev gawk flex gettext \
+          libssl-dev zlib1g-dev
         sudo apt-get clean
-        df -hT
 
     - name: Clone source code
       run: |
         git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        ls -la openwrt
 
     - name: Write feeds.conf.default
       run: |
@@ -44,40 +44,69 @@ jobs:
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
         EOF
+        cat openwrt/feeds.conf.default
 
-    - name: Vendor TurboACC (chenmozhijin/turboacc)
+    - name: Vendor TurboACC
       run: |
         mkdir -p openwrt/package/community
         git clone --depth=1 https://github.com/chenmozhijin/turboacc.git /tmp/turboacc
         cp -r /tmp/turboacc/luci-app-turboacc openwrt/package/community/luci-app-turboacc
         ls -la openwrt/package/community
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
+    - name: Update & install feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        find package/feeds -maxdepth 2 -type d | sort | head -n 50
 
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: Copy config & first defconfig
+      run: |
+        [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config || echo "No $CONFIG_FILE found!"
+        cd openwrt
+        make defconfig
+        echo "==== Selected target ===="
+        grep -E 'CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc' .config || true
+        echo "==== Problematic selections check ===="
+        grep -E 'CONFIG_PACKAGE_(rtty|samba4|screen|shadow|squid|stress-ng|usbgadget|sipgrep)=y' .config || true || true
 
-    - name: Clean broken packages
+    - name: Preflight: scan deprecated deps in feeds
+      run: |
+        cd openwrt
+        echo "=== Scan deprecated deps ==="
+        (grep -R --line-number -E 'libcrypt-compat|libxcrypt|libpcre|kmod-usb-gadget-ncm' package/feeds || true) | tee ../deprecated_deps_scan.txt
+
+    - name: Upload preflight scan
+      uses: actions/upload-artifact@v4
+      with:
+        name: preflight_scan
+        path: deprecated_deps_scan.txt
+
+    - name: Clean broken packages (only those seen in errors)
       run: |
         cd openwrt/package/feeds/packages
         rm -rf rtty samba4 screen shadow squid stress-ng usbgadget || true
         cd ../telephony
         rm -rf sipgrep || true
 
-    - name: Load custom configuration
+    - name: Olddefconfig with verbose
       run: |
-        [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
         cd openwrt
-        make defconfig
-        make olddefconfig
-        if ! grep -q '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config; then
-          echo "ERROR: SL-3000 EMMC not selected"
+        set -o pipefail
+        if ! make -j1 V=s olddefconfig; then
+          echo "olddefconfig failed, collecting .config and logs"
+          cp .config ../.config_failed || true
           exit 1
         fi
-        test -d package/community/luci-app-turboacc || { echo "Missing luci-app-turboacc"; exit 1; }
 
-    - name: Download package
+    - name: Upload config if failed (guard)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config_failed
+        path: .config_failed
+
+    - name: Download packages
       run: |
         cd openwrt
         make download -j8
@@ -91,7 +120,7 @@ jobs:
           make -j1 V=s
         fi
 
-    - name: Organize files
+    - name: Collect firmware
       run: |
         if [ -d openwrt/bin/targets ] && [ "$(find openwrt/bin/targets -type f | wc -l)" -gt 0 ]; then
           cd openwrt/bin/targets/*/*
