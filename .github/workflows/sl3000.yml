@@ -1,0 +1,124 @@
+name: "SL-3000 EMMC 固件编译"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: 2410
+  CONFIG_FILE: sl3000.config
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Init environment (CMake>=3.31 + Ninja + Meson)
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential git wget curl unzip rsync file \
+            python3 python3-pip python3-setuptools python3-venv \
+            libncurses5-dev libncursesw5-dev swig libseccomp-dev gawk flex gettext \
+            libssl-dev zlib1g-dev software-properties-common lsb-release \
+            ninja-build pkg-config meson
+          sudo apt-get remove -y cmake || true
+          sudo apt-add-repository -y 'deb https://apt.kitware.com/ubuntu/ jammy main'
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y cmake || true
+          python3 -m pip install --upgrade --user cmake
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$GITHUB_ENV"
+          export PATH="$HOME/.local/bin:$PATH"
+          cmake --version
+
+      - name: Clone source code
+        run: git clone --depth=1 "$REPO_URL" -b "$REPO_BRANCH" openwrt
+
+      - name: Write feeds.conf.default
+        run: |
+          cat > openwrt/feeds.conf.default << 'EOF'
+          src-git packages https://github.com/immortalwrt/packages.git;master
+          src-git luci https://github.com/immortalwrt/luci.git;master
+          src-git routing https://github.com/openwrt-routing/packages.git;openwrt-23.05
+          src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+          src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
+          EOF
+
+      - name: Update & install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Patch json-c for cmake >=3.31
+        run: |
+          JSONC_DIR="openwrt/package/libs/libjson-c"
+          PATCH_DIR="$JSONC_DIR/patches"
+          mkdir -p "$PATCH_DIR"
+          cat > "$PATCH_DIR/010-fix-cmake-minimum.patch" <<'EOF'
+--- a/apps/CMakeLists.txt
++++ b/apps/CMakeLists.txt
+@@ -1,7 +1,7 @@
+-cmake_minimum_required(VERSION 2.8)
++cmake_minimum_required(VERSION 3.5)
+ project(json-c-apps C)
+EOF
+
+      - name: Prepare .config
+        run: |
+          cp "$CONFIG_FILE" openwrt/.config
+          cd openwrt
+          make defconfig
+
+      - name: Build host tools and override cmake
+        run: |
+          cd openwrt
+          make tools/install -j1 V=s
+          host_bin="$PWD/staging_dir/host/bin"
+          sys_cmake="$(command -v cmake)"
+          ln -sf "$sys_cmake" "$host_bin/cmake"
+          echo "export PATH=\"$host_bin:\$PATH\"" >> "$GITHUB_ENV"
+          "$host_bin/cmake" --version
+
+      - name: Download packages
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -delete
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          if ! make -j"$(nproc)"; then
+            make -j1 V=s
+          fi
+
+      - name: Collect firmware
+        run: |
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: "SL3000_firmware"
+          path: ${{ env.FIRMWARE }}
+
+      - name: Release firmware
+        uses: softprops/action-gh-release@v2.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ${{ env.FIRMWARE }}/*
+          name: "SL-3000 EMMC"
+          tag_name: ${{ github.run_id }}
