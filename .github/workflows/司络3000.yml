@@ -1,4 +1,4 @@
-name: "司络SL-3000 EMMC"
+name: "司络SL-3000 EMMC 分步体检编译"
 
 on:
   workflow_dispatch:
@@ -44,6 +44,7 @@ jobs:
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
         EOF
+        cat openwrt/feeds.conf.default
 
     - name: "Vendor TurboACC (chenmozhijin/turboacc)"
       run: |
@@ -58,26 +59,62 @@ jobs:
     - name: "Install feeds"
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: "Clean broken packages"
+    - name: "Preflight scan deprecated deps"
       run: |
-        cd openwrt/package/feeds/packages
-        rm -rf rtty samba4 screen shadow squid stress-ng usbgadget || true
-        cd ../telephony
-        rm -rf sipgrep || true
+        cd openwrt
+        (grep -R --line-number -E 'libcrypt-compat|libxcrypt|libpcre|kmod-usb-gadget-ncm|kmod-crypto-chacha20poly1305|python3-distutils' package/feeds || true) | tee ../deprecated_deps_scan.txt
 
-    - name: "Load custom configuration"
+    - name: "Upload preflight scan"
+      uses: actions/upload-artifact@v4
+      with:
+        name: "preflight_scan"
+        path: "deprecated_deps_scan.txt"
+
+    - name: "Clean broken packages (comprehensive)"
       run: |
-        [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+        # packages feed
+        cd openwrt/package/feeds/packages
+        rm -rf ovpn-dco strongswan usbgadget sudo tac_plus tcsh ufp uw-imap xinetd xupnpd perl || true
+        rm -rf python3 python-babel python-docker python-incremental || true
+        rm -rf rtty samba4 screen shadow squid stress-ng || true
+        # telephony feed
+        cd ../telephony
+        rm -rf rtpengine sipgrep || true
+
+    - name: "Copy config & defconfig"
+      run: |
+        [ -f $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config || echo "No $CONFIG_FILE found!"
         cd openwrt
         make defconfig
-        make olddefconfig
-        if ! grep -q '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config; then
-          echo "ERROR: SL-3000 EMMC not selected"
+        echo "==== Target check ===="
+        grep -E 'CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: SL-3000 EMMC not selected in .config"; exit 1; }
+        echo "==== Bad selections check ===="
+        (grep -E 'CONFIG_PACKAGE_(ovpn-dco|strongswan|usbgadget|sudo|tac_plus|tcsh|ufp|uw-imap|xinetd|xupnpd|perl|python3|python-babel|python-docker|python-incremental|rtty|samba4|screen|shadow|squid|stress-ng|rtpengine|sipgrep)=y' .config || true) | tee ../bad_selections.txt
+
+    - name: "Upload bad selections"
+      uses: actions/upload-artifact@v4
+      with:
+        name: "bad_selections"
+        path: "bad_selections.txt"
+
+    - name: "Olddefconfig (verbose single-thread)"
+      run: |
+        cd openwrt
+        set -o pipefail
+        if ! make -j1 V=s olddefconfig; then
+          echo "olddefconfig failed; saving .config"
+          cp .config ../.config_failed || true
           exit 1
         fi
-        test -d package/community/luci-app-turboacc || { echo "Missing luci-app-turboacc"; exit 1; }
 
-    - name: "Download package"
+    - name: "Upload config on failure"
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: "config_failed"
+        path: ".config_failed"
+
+    - name: "Download packages"
       run: |
         cd openwrt
         make download -j8
