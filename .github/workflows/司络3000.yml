@@ -25,30 +25,44 @@ jobs:
         set -euxo pipefail
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/lib/jvm /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force || true
+
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install -y \
           build-essential git wget curl unzip rsync file \
           python3 python3-pip python3-setuptools python3-venv \
           libncurses5-dev libncursesw5-dev swig libseccomp-dev gawk flex gettext \
-          libssl-dev zlib1g-dev software-properties-common lsb-release ninja-build pkg-config meson
+          libssl-dev zlib1g-dev software-properties-common lsb-release \
+          ninja-build pkg-config meson
+
+        # 移除系统旧 cmake，安装 kitware cmake（通常为 3.31+）
         sudo apt-get remove -y cmake || true
         sudo apt-add-repository -y 'deb https://apt.kitware.com/ubuntu/ jammy main'
         wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
-        sudo apt-get update && sudo apt-get install -y cmake || true
-        python3 -m pip install --upgrade --user cmake meson
+        sudo apt-get update
+        sudo apt-get install -y cmake || true
+
+        # pip 安装最新 cmake 并前置 PATH（双保险）
+        python3 -m pip install --upgrade --user cmake
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$GITHUB_ENV"
         export PATH="$HOME/.local/bin:$PATH"
+
+        echo "=== Host tool versions ==="
         cmake --version
-        meson --version
-        ninja --version
+        meson --version || true
+        ninja --version || true
+        gcc --version | head -n1
 
     - name: Clone source code
+      shell: bash
       run: |
+        set -eux
         git clone --depth=1 "$REPO_URL" -b "$REPO_BRANCH" openwrt
         test -f openwrt/include/toplevel.mk || { echo "ERROR: source clone failed"; exit 1; }
 
     - name: Write feeds.conf.default
+      shell: bash
       run: |
+        set -eux
         cat > openwrt/feeds.conf.default << 'EOF'
         src-git packages https://github.com/immortalwrt/packages.git;master
         src-git luci https://github.com/immortalwrt/luci.git;master
@@ -56,21 +70,29 @@ jobs:
         src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
         src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
         EOF
+        cat openwrt/feeds.conf.default
 
     - name: Vendor TurboACC
+      shell: bash
       run: |
+        set -eux
         mkdir -p openwrt/package/community
         git clone --depth=1 https://github.com/chenmozhijin/turboacc.git /tmp/turboacc
         cp -r /tmp/turboacc/luci-app-turboacc openwrt/package/community/luci-app-turboacc
+        test -d openwrt/package/community/luci-app-turboacc || { echo "ERROR: TurboACC vendor failed"; exit 1; }
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: Update & install feeds
+      shell: bash
+      run: |
+        set -eux
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: Clean legacy, Python, Rust
+      shell: bash
       run: |
+        set -eux
         cd openwrt/package/feeds/packages
         rm -rf rtty samba4 screen shadow squid stress-ng usbgadget sudo tac_plus tcsh uw-imap xinetd xupnpd perl ovpn-dco strongswan ufp || true
         ls -1 | grep -E '^python' | xargs -I{} rm -rf "{}" || true
@@ -78,28 +100,73 @@ jobs:
         cd ../telephony
         rm -rf sipgrep rtpengine || true
 
-    - name: Load config & defconfig
+    - name: Prepare .config
+      shell: bash
       run: |
+        set -eux
         [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" openwrt/.config || echo "WARNING: no $CONFIG_FILE, using defaults"
         cd openwrt
         make defconfig
         grep -E '^CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y' .config || { echo "ERROR: target not selected"; exit 1; }
 
-    - name: Download packages
+    - name: Build host tools (cmake) and force-override to 3.31+
+      shell: bash
       run: |
+        set -eux
+        cd openwrt
+        # 先让 OpenWrt 安装它的 cmake 到 staging_dir/host/bin
+        make tools/cmake/install -j"$(nproc)"
+        # 用我们安装的新版 cmake 强制替换（软链接），确保后续包用的是 3.31+
+        host_bin="$PWD/staging_dir/host/bin"
+        mkdir -p "$host_bin"
+        sys_cmake="$(command -v cmake)"
+        test -x "$sys_cmake" || { echo "ERROR: system cmake not found"; exit 1; }
+        ln -sf "$sys_cmake" "$host_bin/cmake"
+        echo "Using host cmake: $(readlink -f "$host_bin/cmake")"
+        "$host_bin/cmake" --version
+
+    - name: Download packages
+      shell: bash
+      run: |
+        set -eux
         cd openwrt
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile firmware
+      shell: bash
       run: |
+        set -euxo pipefail
         cd openwrt
-        set -o pipefail
         if ! make -j"$(nproc)"; then
           make -j1 V=s
         fi
 
     - name: Collect firmware
+      shell: bash
       run: |
+        set -eux
         if [ -d openwrt/bin/targets ] && [ "$(find openwrt/bin/targets -type f | wc -l)" -gt 0 ]; then
-          cd openwrt/bin/
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
+        else
+          echo "ERROR: No firmware files found"
+          exit 1
+        fi
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: "SL3000_firmware"
+        path: ${{ env.FIRMWARE }}
+
+    - name: Release firmware
+      uses: softprops/action-gh-release@v2.1.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        files: ${{ env.FIRMWARE }}/*
+        name: "司络SL-3000 EMMC"
+        tag_name: ${{ github.run_id }}
+        body: "司络SL-3000 EMMC 固件编译完成 ✅\n编译时间: $(date)\n设备: SL-3000 (MT7981, EMMC)"
