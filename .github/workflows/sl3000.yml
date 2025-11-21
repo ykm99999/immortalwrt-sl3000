@@ -11,52 +11,139 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install Dependencies
+    - name: Verify Config File
       run: |
+        echo "=== Checking for Configuration Files ==="
+        ls -la *.config || echo "No config files found"
+        if [ -f "sl3000.config" ]; then
+          echo "Found sl3000.config file"
+          cp sl3000.config .config
+          echo "Copied sl3000.config to .config"
+        else
+          echo "Error: sl3000.config file not found!"
+          echo "Available files:"
+          ls -la
+          exit 1
+        fi
+
+    - name: Initial Disk Cleanup
+      run: |
+        echo "=== Starting Disk Space Optimization ==="
+        sudo apt-get autoremove -y --purge
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
+        sudo journalctl --vacuum-time=1h
+        sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+        sudo rm -rf /tmp/*
+        echo "=== Disk Space After Initial Cleanup ==="
+        df -h
+
+    - name: Install Minimal Dependencies
+      run: |
+        echo "=== Installing Minimal Dependencies ==="
         sudo apt-get update
-        sudo apt-get install -y build-essential
-        sudo apt-get install -y libssl-dev libncurses5-dev
-        sudo apt-get install -y gawk gettext unzip python3
-        sudo apt-get install -y subversion git wget curl
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          libssl-dev \
+          libncurses5-dev \
+          gawk \
+          gettext \
+          unzip \
+          python3 \
+          subversion \
+          git \
+          wget \
+          curl \
+          file \
+          rsync
         sudo apt-get clean
 
-    - name: Clone Source
+    - name: Clone Source with Space Optimization
       run: |
-        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
+        echo "=== Cloning Source with Space Optimization ==="
+        git clone \
+          --depth=1 \
+          --single-branch \
+          --branch main \
+          --filter=blob:none \
+          https://github.com/padavanonly/immortalwrt-mt798x \
+          openwrt
+        
+        cd openwrt
+        # 清理git历史节省空间
+        git gc --aggressive --prune=all
+        
+        echo "=== Source Code Size ==="
+        du -sh .
 
     - name: Remove Problematic Feeds
       run: |
         cd openwrt
-        # 完全移除 modemfeed
+        echo "=== Cleaning Feeds Configuration ==="
+        # 完全移除有问题的feeds
         sed -i '/modemfeed/d' feeds.conf.default
-        # 或者注释掉所有不必要的 feeds
-        sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
-        sed -i 's|src-git kiddin9|# src-git kiddin9|' feeds.conf.default
+        sed -i '/kiddin9/d' feeds.conf.default
 
     - name: Setup Feeds
       run: |
         cd openwrt
+        echo "=== Setting up Feeds ==="
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Apply Configuration
       run: |
         cd openwrt
+        echo "=== Applying Configuration ==="
+        # 从仓库根目录复制配置文件
         cp ../.config .config
         make defconfig
 
-    - name: Download
+    - name: Download with Cache Optimization
       run: |
         cd openwrt
-        make download -j2
+        echo "=== Downloading Packages ==="
+        
+        # 创建下载缓存目录
+        mkdir -p /tmp/dl-cache
+        [ -d dl ] && rm -rf dl
+        ln -sf /tmp/dl-cache dl
+        
+        # 使用更少的并行下载任务
+        make download -j1
 
-    - name: Compile
+    - name: Compile with Memory Optimization
       run: |
         cd openwrt
+        echo "=== Starting Compilation ==="
+        
+        # 显示编译前磁盘空间
+        echo "=== Disk Space Before Compilation ==="
+        df -h
+        
+        # 设置编译优化参数
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 分步骤编译以避免内存和磁盘压力
+        echo "Step 1: Compiling toolchain..."
+        make toolchain/install -j2
+        
+        echo "Step 2: Compiling kernel..."
+        make target/linux/compile -j2
+        
+        echo "Step 3: Compiling packages..."
+        make package/compile -j2
+        
+        echo "Step 4: Creating final image..."
         make -j2
+        
+        echo "=== Disk Space After Compilation ==="
+        df -h
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: firmware
+        name: sl3000-firmware
         path: openwrt/bin/targets/**/*
+        retention-days: 7
