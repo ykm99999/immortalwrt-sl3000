@@ -28,6 +28,8 @@ jobs:
         df -h
         echo "内存信息:"
         free -h
+        echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+        ls -la $GITHUB_WORKSPACE || true
 
     - name: Checkout
       uses: actions/checkout@v4
@@ -35,35 +37,29 @@ jobs:
     - name: 安全深度清理
       run: |
         echo "=== 安全深度清理 ==="
-        
-        # 安全停止服务（忽略错误）
         sudo systemctl stop docker containerd snapd 2>/dev/null || echo "服务停止跳过"
-        
-        # 清理包缓存
         sudo apt-get autoremove --purge -y || true
         sudo apt-get clean || true
-        
-        # 清理大目录（安全方式）
+
         cache_dirs=(
           "/usr/share/dotnet"
-          "/opt/ghc" 
+          "/opt/ghc"
           "/usr/local/lib/android"
           "/opt/hostedtoolcache/CodeQL"
           "/usr/local/lib/node_modules"
           "/var/lib/docker"
           "/var/lib/snapd"
         )
-        
+
         for dir in "${cache_dirs[@]}"; do
           if [ -d "$dir" ]; then
             echo "清理目录: $dir"
             sudo rm -rf "$dir" 2>/dev/null || true
           fi
         done
-        
-        # 清理日志（不删除文件，只清空内容）
+
         sudo find /var/log -name "*.log" -type f -exec truncate -s 0 {} \; 2>/dev/null || true
-        
+
         echo "清理后空间:"
         df -h
         free -h
@@ -73,27 +69,28 @@ jobs:
       with:
         path: |
           ~/.ccache
-          /workdir/openwrt/dl
-          /workdir/openwrt/build_dir
+          ${{ github.workspace }}/openwrt/dl
+          ${{ github.workspace }}/openwrt/build_dir
         key: ${{ runner.os }}-openwrt-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-openwrt-
 
     - name: 克隆源码
-      working-directory: /workdir
       run: |
+        cd $GITHUB_WORKSPACE
         if [ -d "openwrt" ]; then
           echo "使用现有仓库"
           cd openwrt
-          git fetch --depth=1
-          git reset --hard origin/$REPO_BRANCH
+          git fetch --depth=1 origin $REPO_BRANCH || true
+          git reset --hard origin/$REPO_BRANCH || true
         else
           echo "克隆新仓库"
           git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
           cd openwrt
         fi
-        
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+        # 保持一个工作区符号链接（方便旧脚本）
+        ln -sf $GITHUB_WORKSPACE/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: 安装必要依赖
       run: |
@@ -119,77 +116,71 @@ jobs:
 
     - name: 准备编译环境
       run: |
-        cd openwrt
-        
-        # 应用自定义配置
+        cd $GITHUB_WORKSPACE/openwrt
+
         [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && cp $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
         [ -e $GITHUB_WORKSPACE/files ] && cp -r $GITHUB_WORKSPACE/files .
-        
-        # 执行自定义脚本
+
         [ -x $GITHUB_WORKSPACE/$DIY_P1_SH ] && $GITHUB_WORKSPACE/$DIY_P1_SH
-        
+
         echo "更新和安装feeds..."
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
+
         [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
         [ -x $GITHUB_WORKSPACE/$DIY_P2_SH ] && $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: 资源监控脚本
       run: |
-        # 创建简单的资源监控
         cat > /tmp/monitor_resources.sh << 'EOF'
         #!/bin/bash
         echo "=== 资源监控启动 ==="
         while true; do
-          echo "$(date): 内存使用: $(free -h | awk 'NR==2{print $3"/"$2}'), 磁盘使用: $(df -h /workdir | awk 'NR==2{print $3"/"$2" ("$5")"}')"
+          echo "$(date): 内存使用: $(free -h | awk 'NR==2{print $3"/"$2}'), 磁盘使用: $(df -h $GITHUB_WORKSPACE | awk 'NR==2{print $3"/"$2" ("$5")"}')"
           sleep 60
         done
         EOF
-        
+
+        sed -i "s|$GITHUB_WORKSPACE|${GITHUB_WORKSPACE}|g" /tmp/monitor_resources.sh || true
         chmod +x /tmp/monitor_resources.sh
-        # 后台运行监控
         /tmp/monitor_resources.sh &
 
     - name: 下载软件包
       run: |
-        cd openwrt
+        cd $GITHUB_WORKSPACE/openwrt
         echo "生成配置..."
         make defconfig
-        
+
         echo "下载软件包..."
         make download -j$(nproc) || make download -j2
-        
-        # 清理无效下载
+
         find dl -size -1024c -delete 2>/dev/null || true
 
     - name: 编译固件
       id: compile
       run: |
-        cd openwrt
-        
+        cd $GITHUB_WORKSPACE/openwrt
+
         echo "=== 开始编译固件 ==="
         echo "当前资源状态:"
         free -h
         df -h
-        
-        # 根据内存动态设置线程数
+
         MEM_AVAILABLE=$(free -g | awk 'NR==2{print $7}')
-        if [ $MEM_AVAILABLE -lt 4 ]; then
+        if [ "$MEM_AVAILABLE" -lt 4 ]; then
           JOBS=1
           echo "内存紧张，使用单线程编译"
-        elif [ $MEM_AVAILABLE -lt 8 ]; then
+        elif [ "$MEM_AVAILABLE" -lt 8 ]; then
           JOBS=2
           echo "内存中等，使用2线程编译"
         else
           JOBS=$(($(nproc) - 1))
-          echo "内存充足，使用$JOBS线程编译"
+          echo "内存充足，使用 $JOBS 线程编译"
         fi
-        
-        # 开始编译
+
         echo "使用 $JOBS 线程编译..."
         make -j$JOBS || make -j1 V=s
-        
+
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
@@ -198,12 +189,9 @@ jobs:
     - name: 整理输出文件
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
+        cd $GITHUB_WORKSPACE/openwrt/bin/targets/*/*
         echo "=== 整理固件文件 ==="
-        
-        # 删除不必要的目录
         rm -rf packages 2>/dev/null || true
-        
         echo "固件文件列表:"
         ls -la
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
@@ -237,6 +225,5 @@ jobs:
       if: always()
       run: |
         echo "=== 最终清理 ==="
-        # 停止监控脚本
         pkill -f monitor_resources.sh 2>/dev/null || true
         echo "编译完成"
