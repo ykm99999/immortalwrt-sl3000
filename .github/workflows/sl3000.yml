@@ -20,17 +20,47 @@ jobs:
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
+    - name: Fix Modemfeed Issue
+      run: |
+        cd openwrt
+        
+        # 方法1: 注释掉 modemfeed
+        if [ -f feeds.conf.default ]; then
+          sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
+        fi
+        
+        # 方法2: 或者创建干净的 feeds 配置
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://git.openwrt.org/feed/packages.git
+src-git luci https://git.openwrt.org/project/luci.git
+src-git routing https://git.openwrt.org/feed/routing.git
+# 注释掉有问题的 feeds
+# src-git telephony https://git.openwrt.org/feed/telephony.git
+# src-git modemfeed https://github.com/koshev-msk/modemfeed.git
+EOF
+
     - name: Setup Environment
       run: |
         cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        
+        # 只更新安全的 feeds
+        ./scripts/feeds update packages
+        ./scripts/feeds update luci
+        ./scripts/feeds update routing
+        
+        # 安装基础包
+        ./scripts/feeds install -a -p packages
+        ./scripts/feeds install -a -p luci
+        ./scripts/feeds install -a -p routing
 
     - name: Create Config
       run: |
         cd openwrt
         echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
         echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-mt7981-firmware=y" >> .config
         make defconfig
 
     - name: Download Packages
