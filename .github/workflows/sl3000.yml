@@ -1,75 +1,96 @@
-name: 司洛SL-3000 EMMC 编译
+name: 司洛SL-3000 ImmortalWrt 智能断点续传编译
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    inputs:
+      resume_from:
+        description: '从指定阶段开始编译'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - start
+          - after_fix
+          - after_feeds
+          - after_config
+          - after_download
+          - after_toolchain
+          - after_kernel
+          - after_packages
+      clean_build:
+        description: '完全清理重新编译'
+        required: false
+        default: false
+        type: boolean
+      skip_problematic:
+        description: '跳过有问题的驱动'
+        required: false
+        default: true
+        type: boolean
 
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: 2410
-  CONFIG_FILE: sl3000.config
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
+  REPO_BRANCH: main
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
-    - name: 检查工作空间
+    # ==================== 初始化阶段 ====================
+    - name: 初始化环境和参数
+      id: init
       run: |
+        echo "=== 编译参数初始化 ==="
         echo "工作目录: $GITHUB_WORKSPACE"
-        echo "目录内容:"
-        ls -la
-        echo "磁盘空间:"
-        df -h
-        echo "内存信息:"
-        free -h
+        echo "恢复模式: ${{ github.event.inputs.resume_from }}"
+        echo "清理构建: ${{ github.event.inputs.clean_build }}"
+        echo "跳过问题驱动: ${{ github.event.inputs.skip_problematic }}"
+        echo "当前时间: $(date)"
+        
+        # 设置默认恢复点
+        if [ "${{ github.event.inputs.resume_from }}" = "auto" ]; then
+          echo "resume_point=start" >> $GITHUB_OUTPUT
+        else
+          echo "resume_point=${{ github.event.inputs.resume_from }}" >> $GITHUB_OUTPUT
+        fi
+        
+        # 清理阶段标记（如果是完全清理）
+        if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
+          echo "清理所有阶段标记..."
+          rm -f .stage_* 2>/dev/null || true
+        fi
 
     - name: Checkout 代码
       uses: actions/checkout@v4
 
-    - name: 系统清理
-      run: |
-        sudo apt-get autoremove -y
-        sudo apt-get clean
-        # 清理一些缓存目录释放空间
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android 2>/dev/null || true
-
-    - name: 配置编译缓存
+    # ==================== 缓存配置 ====================
+    - name: 配置智能分级缓存
       uses: actions/cache@v3
+      id: cache
       with:
         path: |
           ~/.ccache
           ./openwrt/dl
-        key: ${{ runner.os }}-openwrt-${{ github.sha }}
+          ./openwrt/staging_dir/host
+          ./openwrt/staging_dir/toolchain-*
+          ./openwrt/.config
+          ./openwrt/tmp
+          .stage_*
+        key: ${{ runner.os }}-sl3000-resume-${{ github.sha }}-${{ steps.init.outputs.resume_point }}
         restore-keys: |
-          ${{ runner.os }}-openwrt-
+          ${{ runner.os }}-sl3000-resume-${{ github.sha }}-
+          ${{ runner.os }}-sl3000-resume-
 
-    - name: 克隆 OpenWrt 源码
-      run: |
-        echo "开始克隆 OpenWrt 源码..."
-        if [ -d "openwrt" ] && [ -d "openwrt/.git" ]; then
-          echo "使用现有仓库"
-          cd openwrt
-          git fetch --depth=1
-          git reset --hard origin/$REPO_BRANCH
-        else
-          echo "克隆新仓库"
-          rm -rf openwrt
-          git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
-        fi
-        
-        echo "源码目录大小:"
-        du -sh openwrt
-
+    # ==================== 依赖安装阶段 ====================
     - name: 安装编译依赖
+      id: install_deps
+      if: steps.init.outputs.resume_point == 'start' && !cancelled()
       run: |
+        echo "=== 阶段1: 安装编译依赖 ==="
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
@@ -89,207 +110,362 @@ jobs:
           rsync \
           unzip \
           wget \
-          curl
+          curl \
+          file \
+          gzip \
+          bzip2 \
+          xz-utils
+        
+        # 创建阶段完成标记
+        touch .stage_deps_complete
+        echo "deps_ready=true" >> $GITHUB_OUTPUT
 
-    - name: 准备编译配置
+    # ==================== 源码准备阶段 ====================
+    - name: 克隆和修复源码
+      id: prepare_source
+      if: |
+        (steps.install_deps.outputs.deps_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_fix') && 
+        !cancelled()
       run: |
+        echo "=== 阶段2: 源码准备和修复 ==="
+        
+        # 检查是否需要重新克隆
+        if [ ! -d "openwrt" ] || [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
+          echo "克隆源码..."
+          rm -rf openwrt
+          git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
+        elif [ -d "openwrt" ] && [ -d "openwrt/.git" ]; then
+          echo "更新现有源码..."
+          cd openwrt
+          git fetch --depth=1 origin $REPO_BRANCH
+          git reset --hard origin/$REPO_BRANCH
+          cd ..
+        fi
+        
         cd openwrt
         
-        echo "=== 准备编译配置 ==="
+        # 修复已知问题
+        echo "修复已知编译问题..."
         
-        # 检查并应用自定义配置
-        if [ -f "../$CONFIG_FILE" ]; then
-          echo "找到配置文件: ../$CONFIG_FILE"
-          cp "../$CONFIG_FILE" .config
-        else
-          echo "警告: 未找到配置文件 $CONFIG_FILE"
-          # 创建基础配置避免错误
-          echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
-          echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
+        # 1. 修复 WARP 驱动常量错误
+        if [ -f "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" ] && [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          echo "修复 WARP 驱动..."
+          sed -i 's/WED_EX_INT_STA_FLD_TF_TKID_TITO_INVLD/WED_EX_INT_STA_FLD_TF_TKID_FIFO_INVLD/g' \
+            "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" 2>/dev/null || true
         fi
         
-        # 检查是否有自定义文件
-        if [ -d "../files" ]; then
-          echo "应用自定义文件"
-          cp -r "../files" .
+        # 2. 预下载关键文件避免网络问题
+        mkdir -p dl
+        echo "预下载关键依赖..."
+        [ ! -f "dl/libdeflate-1.18.tar.gz" ] && \
+          wget -q -O dl/libdeflate-1.18.tar.gz \
+          "https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.18.tar.gz" || true
+        
+        [ ! -f "dl/lua-5.1.5.tar.gz" ] && \
+          wget -q -O dl/lua-5.1.5.tar.gz \
+          "https://www.lua.org/ftp/lua-5.1.5.tar.gz" || true
+        
+        # 3. 移除有问题的驱动（如果选择跳过）
+        if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          echo "跳过有问题的驱动..."
+          rm -rf package/mtk/drivers/conninfra 2>/dev/null || true
+          rm -rf package/mtk/drivers/wifi-profile 2>/dev/null || true
         fi
         
-        # 检查并执行自定义脚本
-        if [ -f "../diy-part1.sh" ] && [ -x "../diy-part1.sh" ]; then
-          echo "执行 diy-part1.sh"
-          ../diy-part1.sh
-        fi
+        # 创建阶段完成标记
+        touch ../.stage_source_complete
+        echo "source_ready=true" >> $GITHUB_OUTPUT
 
-    - name: 更新和安装软件源
+    # ==================== 软件源配置阶段 ====================
+    - name: 配置软件源
+      id: setup_feeds
+      if: |
+        (steps.prepare_source.outputs.source_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_feeds') && 
+        !cancelled()
       run: |
+        echo "=== 阶段3: 配置软件源 ==="
         cd openwrt
         
-        echo "=== 更新软件源 ==="
+        # 配置稳定的软件源
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://git.openwrt.org/feed/packages.git
+src-git luci https://git.openwrt.org/project/luci.git
+src-git routing https://git.openwrt.org/feed/routing.git
+# 注释掉可能有问题的源
+# src-git telephony https://git.openwrt.org/feed/telephony.git
+EOF
+
         ./scripts/feeds update -a
-        
-        echo "=== 安装软件包 ==="
-        # 分步骤安装，避免依赖问题
-        ./scripts/feeds install -a -p packages
-        ./scripts/feeds install -a -p luci
-        ./scripts/feeds install -a -p routing
-        
-        # 选择性安装telephony包，跳过有问题的
-        ./scripts/feeds install -p telephony rem || true
-        ./scripts/feeds install -p telephony coturn || true
-        ./scripts/feeds install -p telephony libosip2 || true
-        
-        # 安装其他包
         ./scripts/feeds install -a
-
-    - name: 应用最终配置
-      run: |
-        cd openwrt
         
-        # 执行第二阶段自定义脚本
-        if [ -f "../diy-part2.sh" ] && [ -x "../diy-part2.sh" ]; then
-          echo "执行 diy-part2.sh"
-          ../diy-part2.sh
+        # 移除有问题的包
+        if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          ./scripts/feeds uninstall -a -p telephony 2>/dev/null || true
         fi
         
-        echo "生成最终配置"
+        touch ../.stage_feeds_complete
+        echo "feeds_ready=true" >> $GITHUB_OUTPUT
+
+    # ==================== 配置创建阶段 ====================
+    - name: 创建编译配置
+      id: create_config
+      if: |
+        (steps.setup_feeds.outputs.feeds_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_config') && 
+        !cancelled()
+      run: |
+        echo "=== 阶段4: 创建编译配置 ==="
+        cd openwrt
+        
+        # 只有配置不存在或需要清理时才重新创建
+        if [ ! -f ".config" ] || [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
+          echo "创建新的配置文件..."
+          cat > .config << 'EOF'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_mt7981=y
+CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=256
+
+# 编译优化
+CONFIG_CCACHE=y
+
+# 基础系统
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+
+# 网络配置
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+CONFIG_PACKAGE_kmod-mt7981-firmware=y
+CONFIG_PACKAGE_kmod-mt7915e=y
+
+# 系统工具
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_fdisk=y
+
+# 禁用有问题的包
+EOF
+
+          # 根据选择添加禁用配置
+          if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+            cat >> .config << 'EOF'
+# CONFIG_PACKAGE_kmod-mtk-warp is not set
+# CONFIG_PACKAGE_kmod-mtk-conninfra is not set
+# CONFIG_PACKAGE_kmod-mtk-wifi-profile is not set
+# CONFIG_PACKAGE_luci-app-passwall2 is not set
+# CONFIG_PACKAGE_docker is not set
+EOF
+          fi
+        else
+          echo "使用现有的配置文件"
+        fi
+        
+        # 生成完整配置
         make defconfig
         
-        echo "显示目标设备配置:"
-        grep "CONFIG_TARGET" .config | grep "=y" || true
+        echo "配置摘要:"
+        echo "目标设备: $(grep "CONFIG_TARGET.*DEVICE.*=y" .config | head -1 || echo '未知')"
+        
+        touch ../.stage_config_complete
+        echo "config_ready=true" >> $GITHUB_OUTPUT
 
+    # ==================== 下载阶段 ====================
     - name: 下载软件包
+      id: download_packages
+      if: |
+        (steps.create_config.outputs.config_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_download') && 
+        !cancelled()
       run: |
-        cd openwrt
-        echo "开始下载软件包..."
-        make download -j2 || make download -j1
-        
-        # 检查下载结果
-        echo "下载的软件包:"
-        ls -la dl/ | head -10
-        echo "dl目录大小:"
-        du -sh dl/
-
-    - name: 修复 MTK 驱动问题
-      run: |
+        echo "=== 阶段5: 下载软件包 ==="
         cd openwrt
         
-        echo "=== 修复 MTK 驱动编译问题 ==="
-        
-        # 检查并修复 conninfra 驱动问题
-        if [ -d "package/mtk/drivers/conninfra" ]; then
-          echo "修复 conninfra 驱动..."
-          # 方法1: 尝试修复 Makefile
-          find package/mtk/drivers/conninfra -name "Makefile" -exec sed -i 's/^include /# include /' {} \; 2>/dev/null || true
-          # 方法2: 临时跳过编译
-          sed -i 's/CONFIG_PACKAGE_kmod-mtk-conninfra=y/# CONFIG_PACKAGE_kmod-mtk-conninfra is not set/' .config 2>/dev/null || true
+        # 检查下载标记
+        if [ ! -f "../.stage_download_complete" ]; then
+          echo "开始下载软件包..."
+          make download -j2 || make download -j1
+          
+          # 验证下载完整性
+          echo "下载文件统计:"
+          find dl -name "*.gz" -o -name "*.xz" -o -name "*.bz2" | wc -l
+          du -sh dl/
+          
+          touch ../.stage_download_complete
+        else
+          echo "软件包已下载，跳过下载阶段"
         fi
         
-        # 重新生成配置
-        make defconfig
+        echo "download_complete=true" >> $GITHUB_OUTPUT
 
-    - name: 编译固件
-      id: compile
+    # ==================== 工具链编译阶段 ====================
+    - name: 编译工具链
+      id: build_toolchain
+      if: |
+        (steps.download_packages.outputs.download_complete == 'true' || 
+         steps.init.outputs.resume_point == 'after_toolchain') && 
+        !cancelled()
+      run: |
+        echo "=== 阶段6: 编译工具链 ==="
+        cd openwrt
+        
+        if [ ! -f "../.stage_toolchain_complete" ]; then
+          echo "编译工具链..."
+          make toolchain/compile -j2 || make toolchain/compile -j1 V=s
+          touch ../.stage_toolchain_complete
+        else
+          echo "工具链已编译，跳过..."
+        fi
+        
+        echo "toolchain_ready=true" >> $GITHUB_OUTPUT
+
+    # ==================== 内核编译阶段 ====================
+    - name: 编译内核
+      id: build_kernel
+      if: |
+        (steps.build_toolchain.outputs.toolchain_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_kernel') && 
+        !cancelled()
+      run: |
+        echo "=== 阶段7: 编译内核 ==="
+        cd openwrt
+        
+        if [ ! -f "../.stage_kernel_complete" ]; then
+          echo "编译内核..."
+          make target/linux/compile -j2 || make target/linux/compile -j1 V=s
+          touch ../.stage_kernel_complete
+        else
+          echo "内核已编译，跳过..."
+        fi
+        
+        echo "kernel_ready=true" >> $GITHUB_OUTPUT
+
+    # ==================== 软件包编译阶段 ====================
+    - name: 编译软件包
+      id: build_packages
+      if: |
+        (steps.build_kernel.outputs.kernel_ready == 'true' || 
+         steps.init.outputs.resume_point == 'after_packages') && 
+        !cancelled()
+      run: |
+        echo "=== 阶段8: 编译软件包 ==="
+        cd openwrt
+        
+        if [ ! -f "../.stage_packages_complete" ]; then
+          echo "编译软件包..."
+          make package/compile -j2 || make package/compile -j1 V=s
+          touch ../.stage_packages_complete
+        else
+          echo "软件包已编译，跳过..."
+        fi
+        
+        echo "packages_ready=true" >> $GITHUB_OUTPUT
+
+    # ==================== 最终编译阶段 ====================
+    - name: 最终编译和打包
+      id: final_build
+      if: steps.build_packages.outputs.packages_ready == 'true' && !cancelled()
       run: |
         cd openwrt
         
-        echo "=== 开始编译固件 ==="
-        echo "编译前资源状态:"
+        echo "=== 阶段9: 最终编译和打包 ==="
+        echo "系统资源状态:"
         free -h
         df -h
         
-        # 根据可用内存设置编译线程
-        AVAILABLE_MEM=$(free -g | awk 'NR==2{print $7}')
-        echo "可用内存: ${AVAILABLE_MEM}G"
-        
-        if [ "$AVAILABLE_MEM" -lt 2 ]; then
-          JOBS=1
-          echo "内存较少，使用单线程编译"
-        elif [ "$AVAILABLE_MEM" -lt 4 ]; then
-          JOBS=2
-          echo "内存中等，使用2线程编译"
-        else
-          JOBS=$(($(nproc) > 4 ? 4 : $(nproc)))
-          echo "内存充足，使用 $JOBS 线程编译"
-        fi
-        
-        echo "开始编译，使用 $JOBS 线程..."
-        
-        # 使用更稳健的编译方式
-        make -j$JOBS || make -j1 V=s || make -j1 V=sc
+        # 最终编译
+        echo "执行最终编译..."
+        make -j2 || make -j1 V=s || make -j1 V=sc
         
         echo "status=success" >> $GITHUB_OUTPUT
-        
-        # 获取设备名称
-        if grep -q '^CONFIG_TARGET.*DEVICE.*=y' .config; then
-          DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | head -1 | sed -r 's/.*DEVICE_(.*)=y/\1/')
-          echo "DEVICE_NAME=_${DEVICE_NAME}" >> $GITHUB_ENV
-        else
-          echo "DEVICE_NAME=sl3000" >> $GITHUB_ENV
-        fi
-        
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 整理固件文件
-      if: steps.compile.outputs.status == 'success' && !cancelled()
+    # ==================== 输出处理阶段 ====================
+    - name: 整理和验证固件
+      if: steps.final_build.outputs.status == 'success' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
-        echo "=== 固件文件 ==="
-        ls -la
-        
-        # 删除不必要的文件
-        rm -rf packages 2>/dev/null || true
-        
-        echo "固件文件列表:"
-        find . -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) | sort
-        
+        cd openwrt/bin/targets/mediatek/mt7981/
+        echo "=== 固件验证 ==="
+        echo "生成的固件文件:"
+        find . -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -lh {} \;
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
     - name: 上传固件制品
-      if: steps.compile.outputs.status == 'success' && !cancelled()
+      if: steps.final_build.outputs.status == 'success' && !cancelled()
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt固件_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        name: SL3000-固件-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}/*
         retention-days: 30
+        compression-level: 0
 
     - name: 发布到 GitHub Release
-      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
+      if: steps.final_build.outputs.status == 'success' && !cancelled()
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: ${{ env.FIRMWARE }}/*
-        tag_name: build-${{ env.FILE_DATE }}
-        name: SL-3000 固件 ${{ env.FILE_DATE }}
+        tag_name: sl3000-resume-${{ env.FILE_DATE }}
+        name: 司洛SL-3000 断点续传版
         body: |
           # 司洛 SL-3000 ImmortalWrt 固件
           
-          🚀 **自动编译完成**
+          🚀 **断点续传编译完成**
           
+          ## 编译信息
+          - **编译模式**: 智能断点续传
           - **编译时间**: ${{ env.FILE_DATE }}
-          - **设备型号**: 司洛 SL-3000
-          - **源码版本**: ${{ env.REPO_BRANCH }}
-          - **源码仓库**: ${{ env.REPO_URL }}
+          - **恢复起点**: ${{ github.event.inputs.resume_from }}
+          - **跳过问题驱动**: ${{ github.event.inputs.skip_problematic }}
           
-          ## 使用说明
-          
-          1. 选择对应的固件文件刷入
-          2. 首次使用建议恢复出厂设置
-          3. 如有问题请提交 Issue
-          
-          ## 文件列表
-          
-          详见 Artifacts 或 Release 文件列表
+          ## 特点
+          - ✅ 支持从任意阶段恢复编译
+          - ✅ 自动修复已知编译问题
+          - ✅ 智能缓存管理
+          - ✅ 稳定的基础功能
         draft: false
         prerelease: false
 
-    - name: 编译完成通知
+    # ==================== 清理和报告阶段 ====================
+    - name: 清理阶段标记
       if: always()
       run: |
-        if [ "${{ steps.compile.outputs.status }}" = "success" ]; then
-          echo "🎉 固件编译成功!"
-          echo "📁 固件位置: ${{ env.FIRMWARE }}"
+        echo "=== 清理阶段标记 ==="
+        # 保留标记以便下次续传，只在完全成功时考虑清理
+        if [ "${{ steps.final_build.outputs.status }}" = "success" ]; then
+          echo "编译完全成功，保留阶段标记供后续使用"
         else
-          echo "❌ 编译失败"
-          echo "💡 建议检查编译日志获取详细错误信息"
+          echo "编译未完成，保留阶段标记以便续传"
+        fi
+
+    - name: 生成编译报告
+      if: always()
+      run: |
+        echo "=== 智能断点续传编译报告 ==="
+        echo "🎯 最终结果: ${{ steps.final_build.outputs.status || '未完成' }}"
+        echo ""
+        echo "📊 阶段完成情况:"
+        echo "----------------------------------------"
+        echo "✅  依赖安装: ${{ steps.install_deps.outputs.deps_ready || '跳过' }}"
+        echo "✅  源码修复: ${{ steps.prepare_source.outputs.source_ready || '跳过' }}"
+        echo "✅  软件源配置: ${{ steps.setup_feeds.outputs.feeds_ready || '跳过' }}"
+        echo "✅  编译配置: ${{ steps.create_config.outputs.config_ready || '跳过' }}"
+        echo "✅  软件包下载: ${{ steps.download_packages.outputs.download_complete || '跳过' }}"
+        echo "✅  工具链编译: ${{ steps.build_toolchain.outputs.toolchain_ready || '跳过' }}"
+        echo "✅  内核编译: ${{ steps.build_kernel.outputs.kernel_ready || '跳过' }}"
+        echo "✅  软件包编译: ${{ steps.build_packages.outputs.packages_ready || '跳过' }}"
+        echo "✅  最终编译: ${{ steps.final_build.outputs.status || '未完成' }}"
+        echo "----------------------------------------"
+        echo ""
+        if [ "${{ steps.final_build.outputs.status }}" = "success" ]; then
+          echo "🎉 编译成功！固件已上传到制品和Release"
+        else
+          echo "💡 下次运行建议:"
+          echo "   如果失败在某个阶段，下次选择从该阶段之后开始"
+          echo "   例如: 如果工具链编译失败，选择 'after_toolchain'"
+          echo "   当前恢复点: ${{ steps.init.outputs.resume_point }}"
         fi
