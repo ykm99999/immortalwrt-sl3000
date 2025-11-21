@@ -1,166 +1,44 @@
-name: 司洛SL-3000 ImmortalWrt 智能断点续传编译
+name: 司洛SL-3000 极简编译
 
 on:
   workflow_dispatch:
-    inputs:
-      resume_from:
-        description: '从指定阶段开始编译'
-        required: false
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - start
-          - after_fix
-          - after_feeds
-          - after_config
-          - after_download
-          - after_toolchain
-          - after_kernel
-          - after_packages
-      clean_build:
-        description: '完全清理重新编译'
-        required: false
-        default: false
-        type: boolean
-      skip_problematic:
-        description: '跳过有问题的驱动'
-        required: false
-        default: true
-        type: boolean
-
-env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
-  REPO_BRANCH: main
-  TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
 
     steps:
-    # ==================== 初始化阶段 ====================
-    - name: 初始化环境和参数
-      id: init
-      run: |
-        echo "=== 编译参数初始化 ==="
-        echo "工作目录: $GITHUB_WORKSPACE"
-        echo "恢复模式: ${{ github.event.inputs.resume_from }}"
-        echo "清理构建: ${{ github.event.inputs.clean_build }}"
-        echo "跳过问题驱动: ${{ github.event.inputs.skip_problematic }}"
-        echo "当前时间: $(date)"
-        
-        # 设置默认恢复点
-        if [ "${{ github.event.inputs.resume_from }}" = "auto" ]; then
-          echo "resume_point=start" >> $GITHUB_OUTPUT
-        else
-          echo "resume_point=${{ github.event.inputs.resume_from }}" >> $GITHUB_OUTPUT
-        fi
-        
-        # 清理阶段标记（如果是完全清理）
-        if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
-          echo "清理所有阶段标记..."
-          rm -f .stage_* 2>/dev/null || true
-        fi
-
-    - name: Checkout 代码
+    - name: Checkout
       uses: actions/checkout@v4
 
-    # ==================== 缓存配置 ====================
-    - name: 配置智能分级缓存
-      uses: actions/cache@v3
-      id: cache
-      with:
-        path: |
-          ~/.ccache
-          ./openwrt/dl
-          ./openwrt/staging_dir/host
-          ./openwrt/staging_dir/toolchain-*
-          ./openwrt/.config
-          ./openwrt/tmp
-          .stage_*
-        key: ${{ runner.os }}-sl3000-resume-${{ github.sha }}-${{ steps.init.outputs.resume_point }}
-        restore-keys: |
-          ${{ runner.os }}-sl3000-resume-${{ github.sha }}-
-          ${{ runner.os }}-sl3000-resume-
-
-    # ==================== 依赖安装阶段 ====================
-    - name: 安装编译依赖
-      id: install_deps
-      if: steps.init.outputs.resume_point == 'start'
+    - name: 安装依赖
       run: |
-        echo "=== 阶段1: 安装编译依赖 ==="
         sudo apt-get update
-        sudo apt-get install -y build-essential ccache cmake git make
-        sudo apt-get install -y libssl-dev libncurses5-dev zlib1g-dev
-        sudo apt-get install -y gawk gettext flex bison python3 python3-pip
-        sudo apt-get install -y rsync unzip wget curl file gzip bzip2 xz-utils
-        
-        # 创建阶段完成标记
-        touch .stage_deps_complete
-        echo "deps_ready=true" >> $GITHUB_OUTPUT
+        sudo apt-get install -y build-essential libssl-dev libncurses5-dev gawk gettext
 
-    # ==================== 源码准备阶段 ====================
-    - name: 克隆和修复源码
-      id: prepare_source
-      if: steps.init.outputs.resume_point == 'after_fix' || steps.install_deps.outputs.deps_ready == 'true'
+    - name: 克隆源码
       run: |
-        echo "=== 阶段2: 源码准备和修复 ==="
-        
-        # 检查是否需要重新克隆
-        if [ ! -d "openwrt" ] || [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
-          echo "克隆源码..."
-          rm -rf openwrt
-          git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
-        elif [ -d "openwrt" ] && [ -d "openwrt/.git" ]; then
-          echo "更新现有源码..."
-          cd openwrt
-          git fetch --depth=1 origin $REPO_BRANCH
-          git reset --hard origin/$REPO_BRANCH
-          cd ..
-        fi
-        
-        cd openwrt
-        
-        # 修复已知问题
-        echo "修复已知编译问题..."
-        
-        # 1. 修复 WARP 驱动常量错误
-        if [ -f "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" ] && [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
-          echo "修复 WARP 驱动..."
-          sed -i 's/WED_EX_INT_STA_FLD_TF_TKID_TITO_INVLD/WED_EX_INT_STA_FLD_TF_TKID_FIFO_INVLD/g' "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" 2>/dev/null || true
-        fi
-        
-        # 2. 预下载关键文件避免网络问题
-        mkdir -p dl
-        echo "预下载关键依赖..."
-        if [ ! -f "dl/libdeflate-1.18.tar.gz" ]; then
-          wget -q -O dl/libdeflate-1.18.tar.gz "https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.18.tar.gz" || true
-        fi
-        
-        if [ ! -f "dl/lua-5.1.5.tar.gz" ]; then
-          wget -q -O dl/lua-5.1.5.tar.gz "https://www.lua.org/ftp/lua-5.1.5.tar.gz" || true
-        fi
-        
-        # 3. 移除有问题的驱动（如果选择跳过）
-        if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
-          echo "跳过有问题的驱动..."
-          rm -rf package/mtk/drivers/conninfra 2>/dev/null || true
-          rm -rf package/mtk/drivers/wifi-profile 2>/dev/null || true
-        fi
-        
-        # 创建阶段完成标记
-        touch ../.stage_source_complete
-        echo "source_ready=true" >> $GITHUB_OUTPUT
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    # ==================== 软件源配置阶段 ====================
-    - name: 配置软件源
-      id: setup_feeds
-      if: steps.init.outputs.resume_point == 'after_feeds' || steps.prepare_source.outputs.source_ready == 'true'
+    - name: 配置和编译
       run: |
-        echo "=== 阶段3: 配置软件源 ==="
         cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
         
-        # 配置稳定的软件源
-        cat > feeds.conf.default << 'EOF
+        # 极简配置
+        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
+        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        
+        make defconfig
+        make download -j2
+        make -j2
+
+    - name: 上传固件
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: SL3000-固件
+        path: openwrt/bin/targets/**/*
