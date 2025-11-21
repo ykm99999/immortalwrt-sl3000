@@ -6,7 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
 
     steps:
     - name: Checkout
@@ -21,45 +20,17 @@ jobs:
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    - name: Fix Feeds Configuration
-      run: |
-        cd openwrt
-        
-        # 移除或注释掉有问题的 modemfeed
-        if [ -f feeds.conf.default ]; then
-          # 方法1: 注释掉 modemfeed
-          sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
-          
-          # 方法2: 或者创建一个干净的 feeds 配置
-          cat > feeds.conf.default << 'EOF'
-src-git packages https://git.openwrt.org/feed/packages.git
-src-git luci https://git.openwrt.org/project/luci.git
-src-git routing https://git.openwrt.org/feed/routing.git
-# 注释掉有问题的 feed
-# src-git modemfeed https://github.com/koshev-msk/modemfeed.git
-EOF
-        fi
-
     - name: Setup Environment
       run: |
         cd openwrt
-        
-        # 只更新基础的 feeds，跳过有问题的
-        ./scripts/feeds update packages luci routing
-        
-        # 安装基础包
-        ./scripts/feeds install -a -p packages
-        ./scripts/feeds install -a -p luci
-        ./scripts/feeds install -a -p routing
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: Create Config
       run: |
         cd openwrt
         echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
         echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config
-        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-mt7981-firmware=y" >> .config
         make defconfig
 
     - name: Download Packages
@@ -67,15 +38,13 @@ EOF
         cd openwrt
         make download -j2
 
-    - name: Compile Firmware
+    - name: Compile
       run: |
         cd openwrt
         make -j2
 
-    - name: Upload Firmware
-      if: success()
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: SL3000-Firmware
+        name: firmware
         path: openwrt/bin/targets/**/*
-        retention-days: 30
