@@ -59,13 +59,31 @@ jobs:
           rsync
         sudo apt-get clean
 
+    - name: Detect Source Branch
+      run: |
+        echo "=== Detecting Available Branches ==="
+        # 获取仓库的默认分支
+        git ls-remote --heads https://github.com/padavanonly/immortalwrt-mt798x | grep -E "refs/heads/(main|master|openwrt-21.02)" | head -5
+        # 设置默认分支变量
+        if git ls-remote --exit-code --heads https://github.com/padavanonly/immortalwrt-mt798x main > /dev/null 2>&1; then
+          echo "BRANCH=main" >> $GITHUB_ENV
+        elif git ls-remote --exit-code --heads https://github.com/padavanonly/immortalwrt-mt798x master > /dev/null 2>&1; then
+          echo "BRANCH=master" >> $GITHUB_ENV
+        else
+          # 尝试获取第一个可用分支
+          FIRST_BRANCH=$(git ls-remote --heads https://github.com/padavanonly/immortalwrt-mt798x | head -1 | awk -F'/' '{print $3}')
+          echo "BRANCH=$FIRST_BRANCH" >> $GITHUB_ENV
+        fi
+        echo "Using branch: $BRANCH"
+
     - name: Clone Source with Space Optimization
       run: |
         echo "=== Cloning Source with Space Optimization ==="
+        echo "Using branch: ${{ env.BRANCH }}"
         git clone \
           --depth=1 \
           --single-branch \
-          --branch main \
+          --branch ${{ env.BRANCH }} \
           --filter=blob:none \
           https://github.com/padavanonly/immortalwrt-mt798x \
           openwrt
