@@ -41,21 +41,15 @@ jobs:
     - name: 克隆源码
       run: |
         echo "=== 克隆源码 ==="
-        # 先检查可用的分支
-        git ls-remote --heads $REPO_URL | grep -E "heads/(main|master|2410)" || echo "未找到常见分支"
-        
-        # 克隆源码
-        git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt || \
-        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
+        git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
 
     - name: 修复已知问题
       run: |
         cd openwrt
-        
         echo "=== 修复已知问题 ==="
         
         # 修复 WARP 驱动错误
-        if [ -f "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" ] && [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+        if [ -f "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" ]; then
           echo "修复 WARP 驱动..."
           sed -i 's/WED_EX_INT_STA_FLD_TF_TKID_TITO_INVLD/WED_EX_INT_STA_FLD_TF_TKID_FIFO_INVLD/g' "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" 2>/dev/null || true
         fi
@@ -76,8 +70,9 @@ jobs:
     - name: 创建配置
       run: |
         cd openwrt
-        
         echo "=== 创建配置 ==="
+        
+        # 创建基础配置
         cat > .config << 'EOF'
 CONFIG_TARGET_mediatek=y
 CONFIG_TARGET_mediatek_mt7981=y
