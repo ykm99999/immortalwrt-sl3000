@@ -1,4 +1,4 @@
-name: 司洛SL-3000 EMMC - 修复优化版
+name: 司洛SL-3000 EMMC - 依赖修复版
 
 on:
   repository_dispatch:
@@ -22,181 +22,139 @@ jobs:
     timeout-minutes: 240
 
     steps:
-    - name: 检查工作空间
-      run: |
-        echo "初始磁盘空间:"
-        df -h
-        echo "内存信息:"
-        free -h
-        echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-        ls -la $GITHUB_WORKSPACE || true
-
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: 安全深度清理
+    - name: 系统清理
       run: |
-        echo "=== 安全深度清理 ==="
-        sudo systemctl stop docker containerd snapd 2>/dev/null || echo "服务停止跳过"
-        sudo apt-get autoremove --purge -y || true
-        sudo apt-get clean || true
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
 
-        cache_dirs=(
-          "/usr/share/dotnet"
-          "/opt/ghc"
-          "/usr/local/lib/android"
-          "/opt/hostedtoolcache/CodeQL"
-          "/usr/local/lib/node_modules"
-          "/var/lib/docker"
-          "/var/lib/snapd"
-        )
-
-        for dir in "${cache_dirs[@]}"; do
-          if [ -d "$dir" ]; then
-            echo "清理目录: $dir"
-            sudo rm -rf "$dir" 2>/dev/null || true
-          fi
-        done
-
-        sudo find /var/log -name "*.log" -type f -exec truncate -s 0 {} \; 2>/dev/null || true
-
-        echo "清理后空间:"
-        df -h
-        free -h
-
-    - name: 配置智能缓存
+    - name: 配置缓存
       uses: actions/cache@v3
       with:
         path: |
           ~/.ccache
-          ${{ github.workspace }}/openwrt/dl
-          ${{ github.workspace }}/openwrt/build_dir
+          /workdir/openwrt/dl
         key: ${{ runner.os }}-openwrt-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-openwrt-
 
     - name: 克隆源码
+      working-directory: /workdir
       run: |
-        cd $GITHUB_WORKSPACE
         if [ -d "openwrt" ]; then
-          echo "使用现有仓库"
           cd openwrt
-          git fetch --depth=1 origin $REPO_BRANCH || true
-          git reset --hard origin/$REPO_BRANCH || true
+          git fetch --depth=1
+          git reset --hard origin/$REPO_BRANCH
         else
-          echo "克隆新仓库"
           git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
           cd openwrt
         fi
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-        # 保持一个工作区符号链接（方便旧脚本）
-        ln -sf $GITHUB_WORKSPACE/openwrt $GITHUB_WORKSPACE/openwrt
-
-    - name: 安装必要依赖
+    - name: 安装依赖
       run: |
-        echo "安装编译依赖..."
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          ccache \
-          cmake \
-          git \
-          make \
-          libssl-dev \
-          libncurses5-dev \
-          zlib1g-dev \
-          gawk \
-          gettext \
-          flex \
-          bison \
-          python3 \
-          rsync \
-          unzip \
-          wget
+          build-essential ccache cmake git make \
+          libssl-dev libncurses5-dev zlib1g-dev \
+          gawk gettext flex bison python3 \
+          rsync unzip wget
 
-    - name: 准备编译环境
+    - name: 修复依赖配置
       run: |
-        cd $GITHUB_WORKSPACE/openwrt
-
+        cd openwrt
+        
+        # 备份原始feeds配置
         [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && cp $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
-        [ -e $GITHUB_WORKSPACE/files ] && cp -r $GITHUB_WORKSPACE/files .
+        
+        # 检查并修复feeds配置
+        if ! grep -q "src-git packages" feeds.conf.default; then
+          cat >> feeds.conf.default << 'EOF'
+        src-git packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
+        src-git luci https://git.openwrt.org/project/luci.git;openwrt-24.10
+        src-git routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
+        src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
+        EOF
+        fi
 
+        # 执行自定义脚本
         [ -x $GITHUB_WORKSPACE/$DIY_P1_SH ] && $GITHUB_WORKSPACE/$DIY_P1_SH
 
-        echo "更新和安装feeds..."
+    - name: 更新和安装Feeds（修复版）
+      run: |
+        cd openwrt
+        
+        echo "=== 更新Feeds ==="
         ./scripts/feeds update -a
+        
+        echo "=== 安装基础包 ==="
+        # 先安装基础包，避免依赖问题
+        ./scripts/feeds install -a -p packages
+        ./scripts/feeds install -a -p luci
+        ./scripts/feeds install -a -p routing
+        
+        echo "=== 安装telephony包（跳过有问题的包）==="
+        # 单独安装telephony包，跳过有问题的包
+        for pkg in $(./scripts/feeds list -r telephony | cut -d' ' -f2); do
+          case "$pkg" in
+            libpcre|*freeswitch*|*kamailio*)
+              echo "跳过有问题的包: $pkg"
+              ;;
+            *)
+              echo "安装包: $pkg"
+              ./scripts/feeds install -p telephony $pkg || true
+              ;;
+          esac
+        done
+        
+        echo "=== 安装其他包 ==="
         ./scripts/feeds install -a
 
+    - name: 应用配置
+      run: |
+        cd openwrt
         [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
         [ -x $GITHUB_WORKSPACE/$DIY_P2_SH ] && $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: 资源监控脚本
-      run: |
-        cat > /tmp/monitor_resources.sh << 'EOF'
-        #!/bin/bash
-        echo "=== 资源监控启动 ==="
-        while true; do
-          echo "$(date): 内存使用: $(free -h | awk 'NR==2{print $3"/"$2}'), 磁盘使用: $(df -h $GITHUB_WORKSPACE | awk 'NR==2{print $3"/"$2" ("$5")"}')"
-          sleep 60
-        done
-        EOF
-
-        sed -i "s|$GITHUB_WORKSPACE|${GITHUB_WORKSPACE}|g" /tmp/monitor_resources.sh || true
-        chmod +x /tmp/monitor_resources.sh
-        /tmp/monitor_resources.sh &
-
     - name: 下载软件包
       run: |
-        cd $GITHUB_WORKSPACE/openwrt
-        echo "生成配置..."
+        cd openwrt
         make defconfig
-
-        echo "下载软件包..."
-        make download -j$(nproc) || make download -j2
-
+        echo "开始下载软件包..."
+        make download -j$(nproc) || make download -j1
+        # 清理无效下载
         find dl -size -1024c -delete 2>/dev/null || true
 
-    - name: 编译固件
+    - name: 编译固件（安全模式）
       id: compile
       run: |
-        cd $GITHUB_WORKSPACE/openwrt
-
-        echo "=== 开始编译固件 ==="
-        echo "当前资源状态:"
+        cd openwrt
+        
+        echo "=== 开始编译 ==="
+        echo "资源状态:"
         free -h
         df -h
-
-        MEM_AVAILABLE=$(free -g | awk 'NR==2{print $7}')
-        if [ "$MEM_AVAILABLE" -lt 4 ]; then
-          JOBS=1
-          echo "内存紧张，使用单线程编译"
-        elif [ "$MEM_AVAILABLE" -lt 8 ]; then
-          JOBS=2
-          echo "内存中等，使用2线程编译"
-        else
-          JOBS=$(($(nproc) - 1))
-          echo "内存充足，使用 $JOBS 线程编译"
-        fi
-
-        echo "使用 $JOBS 线程编译..."
-        make -j$JOBS || make -j1 V=s
-
+        
+        # 安全编译模式
+        echo "使用安全编译模式（单线程）..."
+        make -j1 V=s || make -j1 V=sc
+        
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 整理输出文件
+    - name: 整理输出
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
-        cd $GITHUB_WORKSPACE/openwrt/bin/targets/*/*
-        echo "=== 整理固件文件 ==="
-        rm -rf packages 2>/dev/null || true
-        echo "固件文件列表:"
-        ls -la
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
-    - name: 上传固件制品
+    - name: 上传固件
       uses: actions/upload-artifact@v4
       if: steps.compile.outputs.status == 'success' && !cancelled()
       with:
@@ -204,7 +162,7 @@ jobs:
         path: ${{ env.FIRMWARE }}/*
         retention-days: 7
 
-    - name: 发布到GitHub Release
+    - name: 发布Release
       if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
       uses: softprops/action-gh-release@v2
       env:
@@ -217,13 +175,5 @@ jobs:
           🚀 OpenWrt 固件编译完成
           - 时间: ${{ env.FILE_DATE }}
           - 源码: ${{ env.REPO_URL }}
-          - 分支: ${{ env.REPO_BRANCH }}
         draft: false
         prerelease: false
-
-    - name: 清理工作空间
-      if: always()
-      run: |
-        echo "=== 最终清理 ==="
-        pkill -f monitor_resources.sh 2>/dev/null || true
-        echo "编译完成"
