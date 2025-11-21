@@ -1,176 +1,282 @@
-name: SL-3000 极速编译
+name: SL-3000 Firmware Build
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    inputs:
+      skip_upload:
+        description: 'Skip firmware upload'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
 
 env:
-  CCACHE_DIR: /tmp/ccache
-  DL_DIR: /tmp/dl
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: 2410
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+  CCACHE_DIR: /workdir/.ccache
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120  # 增加超时时间
+    timeout-minutes: 180
 
     steps:
-    - name: 检查代码和配置
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1  # 浅层克隆，加快速度
-      
-    - name: 验证配置文件
-      run: |
-        echo "=== 检查配置文件 ==="
-        if [ ! -f "sl3000.config" ]; then
-          echo "❌ 错误：未找到 sl3000.config 配置文件"
-          exit 1
-        fi
-        
-        echo "✅ 找到配置文件"
-        echo "=== 关键配置检查 ==="
-        grep -E "CONFIG_TARGET_.*=y|DEVICE_.*=y" sl3000.config || echo "⚠️  警告：设备配置可能不完整"
-        echo "=== 架构信息 ==="
-        grep "CONFIG_TARGET_ARCH_PACKAGES" sl3000.config || echo "未找到架构信息"
+      # Step 1: Checkout code
+      - name: Checkout code and config
+        uses: actions/checkout@v4
 
-    - name: 设置缓存
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.ccache
-          /tmp/dl
-          /tmp/ccache
-        key: ${{ runner.os }}-sl3000-${{ hashFiles('sl3000.config') }}-v3
-        restore-keys: |
-          ${{ runner.os }}-sl3000-${{ hashFiles('sl3000.config') }}-
-          ${{ runner.os }}-sl3000-
+      # Step 2: Verify config file
+      - name: Verify configuration file
+        id: config_check
+        run: |
+          echo "=== Checking configuration file ==="
+          if [ ! -f "sl3000.config" ]; then
+            echo "❌ Error: sl3000.config not found"
+            ls -la
+            exit 1
+          fi
+          echo "✅ Configuration file found"
+          echo "config_status=success" >> $GITHUB_OUTPUT
 
-    - name: 环境准备
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential ccache cmake git \
-          libssl-dev libncurses5-dev zlib1g-dev \
-          gawk gettext unzip python3 python3-pip \
-          rsync subversion swig file time
-        
-        # 设置ccache
-        ccache -o compression=true
-        ccache -o max_size=2G
-        ccache -s
-
-    - name: 准备编译环境
-      run: |
-        set -e
-        echo "=== 克隆代码库 ==="
-        git clone --depth=1 --branch=2410 \
-          https://github.com/padavanonly/immortalwrt-mt798x-24.10 \
-          openwrt
+      # Step 3: 深度清理磁盘空间（加强版）
+      - name: Deep clean disk space
+        run: |
+          echo "=== Starting deep disk cleanup ==="
+          echo "Initial disk usage:"
+          df -h
           
-        cd openwrt
-        
-        echo "=== 应用配置 ==="
-        cp ../sl3000.config .config
-        make defconfig
-        
-        echo "=== 目标设备确认 ==="
-        echo "架构: $(grep 'CONFIG_TARGET_ARCH_PACKAGES' .config | head -1)"
-        echo "设备: $(grep 'CONFIG_TARGET_DEVICE' .config | head -1)"
-        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config | head -1)"
+          # 清理系统缓存
+          echo "Cleaning system caches..."
+          sudo sync
+          echo 3 | sudo tee /proc/sys/vm/drop_caches
+          
+          # 清理各种开发环境和缓存
+          echo "Removing development environments..."
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/* \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /usr/local/share/powershell \
+            /image \
+            /opt/microsoft \
+            /opt/pipx
+          
+          # 清理 Docker
+          echo "Cleaning Docker images..."
+          sudo docker system prune -af 2>/dev/null || true
+          
+          # 清理 APT 缓存
+          echo "Cleaning APT cache..."
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          
+          # 清理日志文件
+          echo "Cleaning log files..."
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \; 2>/dev/null || true
+          sudo journalctl --vacuum-time=1h
+          
+          # 清理临时文件
+          echo "Cleaning temporary files..."
+          sudo rm -rf /tmp/* /var/tmp/*
+          
+          # 清理旧内核（如果有）
+          echo "Cleaning old kernels..."
+          sudo dpkg -l | grep -E "linux-(headers|image|modules)-[0-9]" | grep -v $(uname -r) | awk '{print $2}' | xargs sudo apt-get remove -y 2>/dev/null || true
+          
+          echo "=== Disk usage after cleanup ==="
+          df -h
+          echo "✅ Deep disk cleanup completed"
 
-    - name: 并行下载资源
-      run: |
-        cd openwrt
-        echo "=== 开始下载资源 ==="
-        # 使用更多并行任务下载
-        make -j8 download || make -j4 download || make -j2 download
-        
-        echo "=== 下载完成，检查文件 ==="
-        find dl -name "*.zip" -o -name "*.tar.*" | wc -l | xargs echo "下载文件数量:"
+      # Step 4: Initialize environment
+      - name: Initialize build environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          echo "=== Installing build dependencies ==="
+          sudo apt-get update -qq
+          sudo apt-get install -qq \
+            build-essential ccache cmake curl device-tree-compiler \
+            flex gawk gettext git libncurses5-dev libssl-dev \
+            make patch pkgconf python3 python3-pip \
+            rsync subversion unzip wget zlib1g-dev
 
-    - name: 分阶段编译
-      run: |
-        cd openwrt
-        set -e
-        
-        echo "=== 阶段1: 编译工具链 ==="
-        time make -j$(nproc) tools/compile || make -j2 tools/compile
-        
-        echo "=== 阶段2: 编译工具 ==="
-        time make -j$(nproc) toolchain/compile || make -j2 toolchain/compile
-        
-        echo "=== 阶段3: 编译目标文件 ==="
-        time make -j$(nproc) target/compile || make -j2 target/compile
-        
-        echo "=== 阶段4: 编译软件包 ==="
-        time make -j$(nproc) package/compile || make -j2 package/compile
-        
-        echo "=== 阶段5: 最终打包 ==="
-        time make -j$(nproc) package/index || make -j2 package/index
-        time make -j$(nproc) || make -j2 V=0
+          # Setup swap file for memory
+          echo "Setting up swap file..."
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
 
-    - name: 检查编译结果
-      id: check_build
-      run: |
-        echo "=== 检查编译输出 ==="
-        cd openwrt
-        
-        # 查找所有可能的固件文件
-        FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | head -10)
-        
-        if [ -n "$FIRMWARE_FILES" ]; then
-          echo "✅ 找到固件文件:"
-          echo "$FIRMWARE_FILES"
-          echo "固件数量: $(echo "$FIRMWARE_FILES" | wc -l)"
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "files=$FIRMWARE_FILES" >> $GITHUB_OUTPUT
-        else
-          echo "❌ 未找到固件文件"
-          echo "=== 目录结构 ==="
-          find bin -type d 2>/dev/null | head -20
-          echo "status=failure" >> $GITHUB_OUTPUT
-        fi
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
 
-    - name: 显示编译统计
-      if: always()
-      run: |
-        echo "=== 编译统计 ==="
-        ccache -s 2>/dev/null || echo "ccache 统计不可用"
-        echo "磁盘使用情况:"
-        df -h | grep -v snap
-        echo "内存使用情况:"
-        free -h
+          echo "=== Memory information ==="
+          free -h
 
-    - name: 上传固件
-      if: steps.check_build.outputs.status == 'success'
-      uses: actions/upload-artifact@v4
-      with:
-        name: SL3000_固件_$(date +%Y%m%d_%H%M%S)
-        path: |
-          openwrt/bin/targets/**/*.bin
-          openwrt/bin/targets/**/*.img
-          openwrt/bin/targets/**/*.gz
-        retention-days: 7
-        compression-level: 0  # 不压缩，加快上传
+      # Step 5: Configure build cache
+      - name: Configure build cache
+        run: |
+          sudo mkdir -p $CCACHE_DIR
+          sudo chown -R $USER:$GROUPS $CCACHE_DIR
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          ccache -o compression=true
+          ccache -o max_size=1G
+          ccache -s
 
-    - name: 编译失败诊断
-      if: steps.check_build.outputs.status == 'failure'
-      run: |
-        echo "❌ 编译失败诊断"
-        cd openwrt
-        
-        echo "1. 配置文件状态:"
-        [ -f ".config" ] && echo "✅ .config 存在" || echo "❌ .config 不存在"
-        
-        echo "2. 关键配置检查:"
-        grep -E "TARGET_ARCH|TARGET_DEVICE|TARGET_SUBTARGET" .config 2>/dev/null || echo "无法读取配置"
-        
-        echo "3. 目录结构:"
-        ls -la bin/ 2>/dev/null || echo "bin 目录不存在"
-        find . -name "logs" -type d 2>/dev/null | head -5
-        
-        echo "4. 可能的错误文件:"
-        find . -name "*.log" -o -name "error*" 2>/dev/null | head -10
+      # Step 6: Clone source code
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          echo "=== Cloning source code ==="
+          if [ ! -d "openwrt" ]; then
+            git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+          else
+            cd openwrt
+            git fetch --depth=1 origin $REPO_BRANCH
+            git reset --hard origin/$REPO_BRANCH
+          fi
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          
+          echo "Disk usage after cloning:"
+          df -h
+
+      # Step 7: Update feeds
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          echo "=== Updating feeds ==="
+          if ! grep -q "passwall2" feeds.conf.default; then
+            echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
+          fi
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # Step 8: Apply configuration
+      - name: Apply configuration
+        run: |
+          cp sl3000.config openwrt/.config
+          cd openwrt
+          make defconfig
+
+      # Step 9: Download dependencies
+      - name: Download dependencies
+        run: |
+          cd openwrt
+          echo "=== Downloading dependencies ==="
+          make download -j2
+          echo "Disk usage after downloads:"
+          df -h
+
+      # Step 10: 编译前再次清理缓存
+      - name: Pre-build cache cleanup
+        run: |
+          echo "=== Pre-build cache cleanup ==="
+          sudo sync
+          echo 3 | sudo tee /proc/sys/vm/drop_caches
+          free -h
+
+      # Step 11: Build firmware
+      - name: Build firmware
+        id: compile
+        env:
+          CCACHE_DIR: ${{ env.CCACHE_DIR }}
+        run: |
+          cd openwrt
+          echo "=== Starting firmware build ==="
+          echo "CPU cores: $(nproc)"
+          echo "Memory before build:"
+          free -h
+          
+          export CCACHE_DIR="$CCACHE_DIR"
+          
+          if make -j2; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif make -j1 V=s; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Disk usage after build:"
+          df -h
+
+      # Step 12: Check build results
+      - name: Check build results
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          cd openwrt/bin/targets
+          echo "=== Build results ==="
+          find . -name "*.bin" -o -name "*.img" | while read file; do
+            echo "Firmware: $file ($(du -h "$file" | cut -f1))"
+          done
+          echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
+
+      # Step 13: Upload artifacts
+      - name: Upload firmware artifacts
+        if: steps.compile.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: SL3000-Firmware-$(date +%Y%m%d)
+          path: openwrt/bin/targets/**/*
+          retention-days: 7
+
+      # Step 14: Create release
+      - name: Create GitHub release
+        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: sl3000-$(date +%Y%m%d)
+          name: SL-3000 Firmware $(date +%Y%m%d)
+          body: |
+            # SL-3000 ImmortalWrt Firmware
+
+            ## Firmware Information
+            - **Device**: SL-3000 (MT7981)
+            - **System**: ImmortalWrt 24.10
+            - **Kernel**: Linux 6.6
+            - **Build Time**: $(date)
+
+            ## Features
+            - Passwall2
+            - Docker support
+            - LuCI interface
+            - Chinese language
+
+            ## Installation
+            1. Enter factory upgrade page
+            2. Select firmware file
+            3. Wait for reboot
+          files: ${{ env.FIRMWARE_PATH }}/**/*
+
+      # Step 15: 最终磁盘使用报告
+      - name: Final disk usage report
+        if: always()
+        run: |
+          echo "=== Final disk usage report ==="
+          df -h
+          echo "=== Memory usage report ==="
+          free -h
+          echo "=== CCache statistics ==="
+          ccache -s
+
+      # Step 16: Cleanup swap file
+      - name: Cleanup swap file
+        if: always()
+        run: |
+          sudo swapoff /swapfile 2>/dev/null || true
+          sudo rm -f /swapfile 2>/dev/null || true
+          echo "✅ Swap file cleaned up"
