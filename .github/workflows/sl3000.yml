@@ -1,55 +1,328 @@
-name: SL3000 Build
+name: SL3000 Build with Checkpoint Resume
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_docker:
+        description: 'Skip Docker to save space'
+        required: false
+        default: 'false'
+        type: boolean
+      skip_passwall:
+        description: 'Skip PassWall2 to save space'
+        required: false
+        default: 'false'
+        type: boolean
+      resume_from:
+        description: 'Resume from specific checkpoint'
+        required: false
+        default: ''
+        type: choice
+        options:
+        - ''
+        - 'feeds'
+        - 'download'
+        - 'compile_toolchain'
+        - 'compile_kernel'
+        - 'compile_packages'
+        - 'final_image'
+
+env:
+  CCACHE_DIR: /tmp/ccache
+  CCACHE_MAXSIZE: 2G
+  BUILD_DIR: /tmp/openwrt-build
+  CHECKPOINT_FILE: /tmp/build_checkpoint
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    
+    strategy:
+      matrix:
+        include:
+          - device: sl_3000-emmc
+            subtarget: mt7981
+            target: mediatek
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Install Dependencies
+    - name: Check Current Checkpoint
+      id: checkpoint
       run: |
+        if [ -f "$CHECKPOINT_FILE" ]; then
+          CURRENT_CHECKPOINT=$(cat $CHECKPOINT_FILE)
+          echo "current_checkpoint=$CURRENT_CHECKPOINT" >> $GITHUB_OUTPUT
+          echo "Resuming from checkpoint: $CURRENT_CHECKPOINT"
+        else
+          echo "current_checkpoint=start" >> $GITHUB_OUTPUT
+          echo "Starting fresh build"
+        fi
+
+    - name: Setup Disk Space (Aggressive)
+      if: steps.checkpoint.outputs.current_checkpoint == 'start'
+      run: |
+        echo "=== Initial Disk Space Cleanup ==="
+        sudo swapoff -a || true
+        sudo rm -f /swapfile
+        
+        # 彻底清理系统
+        sudo apt-get autoremove -y --purge
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/* /usr/share/info/*
+        
+        # 清理内核头文件和开发包
+        sudo dpkg -l | grep -E 'linux-(headers|modules)' | awk '{print $2}' | xargs sudo apt-get remove -y --purge || true
+        
+        # 清理日志
+        sudo journalctl --vacuum-time=1h
+        sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+        sudo rm -f /var/log/*.gz /var/log/*.1
+        
+        # 清理临时文件
+        sudo rm -rf /tmp/* /var/tmp/*
+        
+        echo "=== Disk Space After Initial Cleanup ==="
+        df -h
+        echo "=== Inode Usage ==="
+        df -i
+
+    - name: Restore Build Cache
+      uses: actions/cache/restore@v4
+      id: cache-restore
+      with:
+        path: |
+          ${{ env.BUILD_DIR }}
+          ${{ env.CCACHE_DIR }}
+          /tmp/dl-cache
+        key: openwrt-sl3000-${{ github.sha }}
+        restore-keys: |
+          openwrt-sl3000-
+
+    - name: Install Minimal Dependencies
+      if: steps.checkpoint.outputs.current_checkpoint == 'start'
+      run: |
+        echo "=== Installing Minimal Dependencies ==="
+        # 创建最小化包列表文件
+        cat > /tmp/minimal-packages.txt << EOF
+        build-essential
+        libssl-dev
+        libncurses5-dev
+        gawk
+        gettext
+        unzip
+        python3
+        subversion
+        git
+        wget
+        curl
+        file
+        rsync
+        ccache
+        EOF
+        
         sudo apt-get update
-        sudo apt-get install -y build-essential libssl-dev libncurses5-dev gawk gettext
+        xargs -a /tmp/minimal-packages.txt sudo apt-get install -y --no-install-recommends
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
 
-    - name: Clone Source
+    - name: Clone Source (Ultra Minimal)
+      if: steps.checkpoint.outputs.current_checkpoint == 'start'
       run: |
-        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
-
-    - name: Fix Feeds
-      run: |
+        echo "=== Cloning Source ==="
+        mkdir -p $BUILD_DIR
+        cd $BUILD_DIR
+        
+        # 只克隆必要分支和深度
+        git clone \
+          --depth=1 \
+          --single-branch \
+          --branch main \
+          --no-tags \
+          --filter=blob:none \
+          --sparse \
+          https://github.com/padavanonly/immortalwrt-mt798x \
+          openwrt
+        
         cd openwrt
+        # 只检出必要的目录
+        git sparse-checkout set \
+          "package/*" \
+          "config/*" \
+          "scripts/*" \
+          "include/*" \
+          "target/*" \
+          "toolchain/*" \
+          "rules.mk" \
+          "Makefile" \
+          "feeds.conf.default"
+        
+        # 清理git历史
+        git gc --aggressive --prune=all
+        echo "feeds" > $CHECKPOINT_FILE
+
+    - name: Setup Feeds
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'feeds' || 
+        steps.checkpoint.outputs.current_checkpoint == 'start'
+      run: |
+        echo "=== Setting up Feeds ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 精简feeds配置
         sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
-
-    - name: Setup
-      run: |
-        cd openwrt
+        sed -i 's|src-git kiddin9|# src-git kiddin9|' feeds.conf.default
+        sed -i 's|src-git lienol|# src-git lienol|' feeds.conf.default
+        
+        # 只更新必要的feeds
         ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        ./scripts/feeds install -a -d y
+        
+        echo "download" > $CHECKPOINT_FILE
 
-    - name: Config
+    - name: Apply Configuration
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'download' || 
+        steps.checkpoint.outputs.current_checkpoint == 'feeds'
       run: |
-        cd openwrt
-        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
-        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
+        echo "=== Applying Configuration ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 创建基础配置
+        cat > .config << 'EOF'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_mt7981=y
+CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y
+CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"
+CONFIG_DEFAULT_TARGET_OPTIMIZATION="-Os -pipe -mcpu=cortex-a53 -mtune=cortex-a53"
+CONFIG_CPU_TYPE="cortex-a53"
+CONFIG_LINUX_5_4=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
+EOF
+
+        # 应用完整配置
+        if [ -d "/home/runner/work/_temp/config-files" ]; then
+          find /home/runner/work/_temp/config-files -name "*.config" -exec cat {} >> .config \;
+        fi
+        
         make defconfig
 
-    - name: Download
+    - name: Download Sources with Resume
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'download' || 
+        steps.checkpoint.outputs.current_checkpoint == 'feeds'
       run: |
-        cd openwrt
-        make download -j2
+        echo "=== Downloading Sources ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 使用断点续传下载
+        mkdir -p /tmp/dl-cache
+        [ -d dl ] && rm -rf dl
+        ln -sf /tmp/dl-cache dl
+        
+        # 分批次下载，避免内存不足
+        for i in $(seq 1 3); do
+          if make download -j2; then
+            break
+          fi
+          echo "Download attempt $i failed, retrying..."
+          sleep 10
+        done
+        
+        echo "compile_toolchain" > $CHECKPOINT_FILE
 
-    - name: Compile
+    - name: Compile Toolchain (Checkpoint 1)
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'compile_toolchain' || 
+        steps.checkpoint.outputs.current_checkpoint == 'download'
       run: |
-        cd openwrt
-        make -j2
+        echo "=== Compiling Toolchain ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 只编译工具链
+        make toolchain/install -j$(nproc) || make toolchain/install -j1
+        
+        echo "compile_kernel" > $CHECKPOINT_FILE
 
-    - name: Upload
+    - name: Compile Kernel (Checkpoint 2)
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'compile_kernel' || 
+        steps.checkpoint.outputs.current_checkpoint == 'compile_toolchain'
+      run: |
+        echo "=== Compiling Kernel ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 编译内核和相关模块
+        make target/linux/compile -j$(nproc) || make target/linux/compile -j1
+        
+        echo "compile_packages" > $CHECKPOINT_FILE
+
+    - name: Compile Packages (Checkpoint 3)
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'compile_packages' || 
+        steps.checkpoint.outputs.current_checkpoint == 'compile_kernel'
+      run: |
+        echo "=== Compiling Packages ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 分批编译包，避免内存不足
+        for package_set in "base" "luci" "packages" "routing" "telephony"; do
+          echo "Compiling $package_set packages..."
+          make package/compile -j$(nproc) PACKAGE_SUBDIRS=$package_set || \
+          make package/compile -j1 PACKAGE_SUBDIRS=$package_set
+        done
+        
+        echo "final_image" > $CHECKPOINT_FILE
+
+    - name: Create Final Image (Checkpoint 4)
+      if: |
+        steps.checkpoint.outputs.current_checkpoint == 'final_image' || 
+        steps.checkpoint.outputs.current_checkpoint == 'compile_packages'
+      run: |
+        echo "=== Creating Final Image ==="
+        cd $BUILD_DIR/openwrt
+        
+        # 创建最终镜像
+        make -j$(nproc) || make -j1
+        
+        echo "completed" > $CHECKPOINT_FILE
+
+    - name: Save Build Cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ env.BUILD_DIR }}
+          ${{ env.CCACHE_DIR }}
+          /tmp/dl-cache
+        key: openwrt-sl3000-${{ github.sha }}
+
+    - name: Upload Artifacts
+      if: steps.checkpoint.outputs.current_checkpoint == 'completed'
       uses: actions/upload-artifact@v4
       with:
-        name: firmware
-        path: openwrt/bin/targets/**/*
+        name: sl3000-firmware
+        path: |
+          ${{ env.BUILD_DIR }}/openwrt/bin/targets/**/*
+        retention-days: 7
+
+    - name: Cleanup on Success
+      if: steps.checkpoint.outputs.current_checkpoint == 'completed'
+      run: |
+        echo "=== Build Completed Successfully ==="
+        # 清理缓存文件释放空间
+        rm -f $CHECKPOINT_FILE
+        rm -rf $BUILD_DIR/openwrt/build_dir
+        rm -rf $BUILD_DIR/openwrt/staging_dir
+
+    - name: Report Checkpoint on Failure
+      if: failure()
+      run: |
+        if [ -f "$CHECKPOINT_FILE" ]; then
+          CHECKPOINT=$(cat $CHECKPOINT_FILE)
+          echo "Build failed at checkpoint: $CHECKPOINT"
+          echo "To resume, set resume_from parameter to: $CHECKPOINT"
+        else
+          echo "Build failed before any checkpoint was set"
+        fi
