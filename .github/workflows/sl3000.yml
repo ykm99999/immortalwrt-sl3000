@@ -1,16 +1,4 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-
-name: 司洛SL-3000 EMMC
+name: 司洛SL-3000 EMMC - 极致优化版
 
 on:
   repository_dispatch:
@@ -31,131 +19,298 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    
+    # 使用更大的runner（如果有）
+    # runs-on: [self-hosted, large, x64]
+    
+    strategy:
+      matrix:
+        # 分阶段构建，减少内存压力
+        stage: [prepare, compile]
+    timeout-minutes: 240
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
-
-    - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    - name: 检查工作空间
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        echo "初始磁盘空间:"
+        df -h
+        echo "内存信息:"
+        free -h
 
-    - name: Clone source code
+    - name: Checkout (极限优化)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        sparse-checkout: |
+          ${{ env.FEEDS_CONF }}
+          ${{ env.CONFIG_FILE }}
+          ${{ env.DIY_P1_SH }}
+          ${{ env.DIY_P2_SH }}
+          files/
+        sparse-checkout-cone-mode: false
+
+    - name: 系统级深度清理
+      run: |
+        echo "=== 深度系统清理 ==="
+        # 停止不必要的服务
+        sudo systemctl stop docker containerd snapd || true
+        
+        # 清理所有缓存和临时文件
+        sudo sync
+        sudo echo 3 > /proc/sys/vm/drop_caches
+        
+        # 彻底清理包管理
+        sudo dpkg --purge $(dpkg -l | grep "^rc" | awk '{print $2}') 2>/dev/null || true
+        sudo apt-get autoremove --purge -y
+        sudo apt-get clean
+        
+        # 清理所有可能的大目录
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
+        sudo rm -rf /var/lib/docker /var/lib/snapd /usr/lib/firefox /usr/lib/google-cloud-sdk
+        sudo rm -rf /usr/local/lib/node_modules /opt/microsoft /usr/share/swift
+        
+        # 清理日志和临时文件
+        sudo find /var/log -type f -exec truncate -s 0 {} \;
+        sudo find /tmp -type f -atime +1 -delete 2>/dev/null || true
+        
+        echo "清理后空间:"
+        df -h
+        free -h
+
+    - name: 配置分层缓存
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.ccache
+          /workdir/openwrt/dl
+          /workdir/openwrt/build_dir/target-*
+          /workdir/openwrt/staging_dir/target-*
+        key: ${{ runner.os }}-openwrt-${{ hashFiles('**/.config', '**/feeds.conf.default') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-${{ hashFiles('**/.config', '**/feeds.conf.default') }}-
+          ${{ runner.os }}-openwrt-
+
+    - name: 智能源码管理
       working-directory: /workdir
       run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        echo "=== 智能源码管理 ==="
+        if [ -d "openwrt" ] && [ -f "openwrt/.git/index" ]; then
+          echo "使用现有仓库并增量更新"
+          cd openwrt
+          git config core.compression 0
+          git config http.postBuffer 524288000
+          git fetch --depth=1 origin $REPO_BRANCH
+          git reset --hard origin/$REPO_BRANCH
+          git clean -fdx
+        else
+          echo "全新克隆（优化版）"
+          rm -rf openwrt
+          git clone \
+            --depth=1 \
+            --branch $REPO_BRANCH \
+            --single-branch \
+            --filter=blob:none \
+            --sparse \
+            $REPO_URL openwrt
+          cd openwrt
+          git sparse-checkout set --no-cone "/*" "!/.*"
+        fi
+        
+        # 创建工作区链接
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        echo "源码目录信息:"
+        du -sh .git . | head -5
 
-    - name: Load custom feeds
+    - name: 最小化依赖安装
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        echo "=== 最小化依赖安装 ==="
+        # 仅安装绝对必要的包
+        essential_packages=(
+          build-essential
+          ccache
+          gcc
+          g++
+          make
+          cmake
+          ninja-build
+          git
+          libssl-dev
+          libncurses5-dev
+          zlib1g-dev
+          gawk
+          gettext
+          flex
+          bison
+          python3
+          rsync
+          unzip
+          wget
+        )
+        
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends "${essential_packages[@]}"
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
-
-    - name: Load custom configuration
+    - name: 环境优化配置
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        echo "=== 环境优化配置 ==="
+        # 配置ccache
+        mkdir -p ~/.ccache
+        cat > ~/.ccache/ccache.conf << EOF
+        max_size = 2.0G
+        cache_dir = /workdir/.ccache
+        compression = true
+        compression_level = 1
+        sloppiness = time_macros,include_file_mtime,include_file_ctime
+        EOF
+        
+        # 优化系统参数
+        echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
+        echo "vm.vfs_cache_pressure=50" | sudo tee -a /etc/sysctl.conf
+        sudo sysctl -p
+        
+        # 设置编译环境
+        export CCACHE_DIR="/workdir/.ccache"
+        export CCACHE_MAXSIZE="2G"
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 显示优化后状态
+        echo "优化后内存:"
+        free -h
+        echo "ccache状态:"
+        ccache -s
 
-    - name: Download package
-      id: package
+    - name: 分阶段构建准备
+      id: prepare
+      if: matrix.stage == 'prepare'
       run: |
         cd openwrt
+        
+        echo "=== 阶段1: 准备环境 ==="
+        # 应用自定义配置
+        [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && cp $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
+        [ -e $GITHUB_WORKSPACE/files ] && cp -r $GITHUB_WORKSPACE/files .
+        
+        # 执行自定义脚本
+        [ -x $GITHUB_WORKSPACE/$DIY_P1_SH ] && $GITHUB_WORKSPACE/$DIY_P1_SH
+        
+        echo "更新feeds..."
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+        [ -x $GITHUB_WORKSPACE/$DIY_P2_SH ] && $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        echo "下载预编译包..."
         make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        make download -j$(nproc) || make download -j2
+        
+        # 清理无效的下载文件
+        find dl -size -1024c -delete 2>/dev/null || true
+        
+        echo "准备阶段完成"
 
-    - name: Compile the firmware
-      id: compile
+    - name: 分阶段编译
+      id: compile  
+      if: matrix.stage == 'compile'
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        echo "=== 阶段2: 编译固件 ==="
+        echo "系统资源状态:"
+        free -h
+        df -h
+        
+        # 内存优化编译
+        MEM_AVAILABLE=$(free -g | awk 'NR==2{print $7}')
+        if [ $MEM_AVAILABLE -lt 4 ]; then
+          JOBS=1
+          echo "内存紧张，使用单线程编译"
+        elif [ $MEM_AVAILABLE -lt 8 ]; then
+          JOBS=2
+          echo "内存中等，使用2线程编译"
+        else
+          JOBS=$(($(nproc) - 1))
+          echo "内存充足，使用$JOBS线程编译"
+        fi
+        
+        # 分步骤编译，减少内存峰值
+        echo "开始编译..."
+        for step in toolchain/install target/compile package/compile package/index; do
+          echo "编译步骤: $step"
+          make $step -j$JOBS || make $step -j1 V=s
+        done
+        
+        # 最终链接
+        echo "最终链接..."
+        make -j1 || make -j1 V=s
+        
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+    - name: 资源监控
+      uses: ./.github/actions/monitor-resources
+      if: always()
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
+        interval: 30
 
-    - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+    - name: 整理输出文件
+      if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
+        echo "=== 整理输出文件 ==="
+        
+        # 删除不必要的文件
         rm -rf packages
+        find . -name "*.buildinfo" -delete
+        find . -name "*.json" -delete
+        
+        # 重命名文件以便识别
+        for file in *; do
+          if [[ $file == *"rootfs"* ]] || [[ $file == *"kernel"* ]] || [[ $file == *"sysupgrade"* ]]; then
+            newname="${file//rootfs/rootfs${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}}"
+            mv "$file" "$newname" 2>/dev/null || true
+          fi
+        done
+        
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+        echo "文件列表:"
+        ls -la
 
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
+    - name: 上传固件
+      uses: actions/upload-artifact@v4
+      if: steps.compile.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        name: OpenWrt_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}/*
+        compression-level: 0
+        retention-days: 7
 
-    - name: Generate release tag
-      id: tag
+    - name: 发布到Release
+      uses: softprops/action-gh-release@v2
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: 发布固件至Release
-      uses: softprops/action-gh-release@v2.1.0
-      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: ${{ env.FIRMWARE }}/*
-        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.WIFI_VERSION }}${{ env.EEPROM }}${{ env.BUILD_DOCKERMAN }}
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
+        tag_name: build_${{ env.FILE_DATE }}
+        name: 编译完成 ${{ env.FILE_DATE }}
+        body: |
+          🚀 OpenWrt 固件编译完成
+          - 设备: ${{ env.DEVICE_NAME }}
+          - 时间: ${{ env.FILE_DATE }}
+          - 源码: ${{ env.REPO_URL }}@${{ env.REPO_BRANCH }}
+        draft: false
+        prerelease: false
 
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: 清理工作空间
+      if: always()
+      run: |
+        echo "=== 最终清理 ==="
+        sudo rm -rf /workdir/openwrt/build_dir
+        sudo rm -rf /workdir/openwrt/staging_dir
+        sudo rm -rf /workdir/openwrt/tmp
+        df -h
