@@ -1,17 +1,16 @@
-name: 司洛SL-3000 EMMC - 依赖修复版
+name: 司洛SL-3000 EMMC 编译
 
 on:
-  repository_dispatch:
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: 2410
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: sl3000.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
@@ -19,161 +18,255 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    timeout-minutes: 180
 
     steps:
-    - name: Checkout
+    - name: 检查工作空间
+      run: |
+        echo "工作目录: $GITHUB_WORKSPACE"
+        echo "目录内容:"
+        ls -la
+        echo "磁盘空间:"
+        df -h
+        echo "内存信息:"
+        free -h
+
+    - name: Checkout 代码
       uses: actions/checkout@v4
 
     - name: 系统清理
       run: |
         sudo apt-get autoremove -y
         sudo apt-get clean
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+        # 清理一些缓存目录释放空间
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android 2>/dev/null || true
 
-    - name: 配置缓存
+    - name: 配置编译缓存
       uses: actions/cache@v3
       with:
         path: |
           ~/.ccache
-          /workdir/openwrt/dl
+          ./openwrt/dl
         key: ${{ runner.os }}-openwrt-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-openwrt-
 
-    - name: 克隆源码
-      working-directory: /workdir
+    - name: 克隆 OpenWrt 源码
       run: |
-        if [ -d "openwrt" ]; then
+        echo "开始克隆 OpenWrt 源码..."
+        if [ -d "openwrt" ] && [ -d "openwrt/.git" ]; then
+          echo "使用现有仓库"
           cd openwrt
           git fetch --depth=1
           git reset --hard origin/$REPO_BRANCH
         else
+          echo "克隆新仓库"
+          rm -rf openwrt
           git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt
-          cd openwrt
         fi
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        
+        echo "源码目录大小:"
+        du -sh openwrt
 
-    - name: 安装依赖
+    - name: 安装编译依赖
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential ccache cmake git make \
-          libssl-dev libncurses5-dev zlib1g-dev \
-          gawk gettext flex bison python3 \
-          rsync unzip wget
+          build-essential \
+          ccache \
+          cmake \
+          git \
+          make \
+          libssl-dev \
+          libncurses5-dev \
+          zlib1g-dev \
+          gawk \
+          gettext \
+          flex \
+          bison \
+          python3 \
+          python3-pip \
+          rsync \
+          unzip \
+          wget \
+          curl
 
-    - name: 修复依赖配置
+    - name: 准备编译配置
       run: |
         cd openwrt
         
-        # 备份原始feeds配置
-        [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && cp $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
+        echo "=== 准备编译配置 ==="
         
-        # 检查并修复feeds配置
-        if ! grep -q "src-git packages" feeds.conf.default; then
-          cat >> feeds.conf.default << 'EOF'
-        src-git packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
-        src-git luci https://git.openwrt.org/project/luci.git;openwrt-24.10
-        src-git routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
-        src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
-        EOF
+        # 检查并应用自定义配置
+        if [ -f "../$CONFIG_FILE" ]; then
+          echo "找到配置文件: ../$CONFIG_FILE"
+          cp "../$CONFIG_FILE" .config
+        else
+          echo "警告: 未找到配置文件 $CONFIG_FILE"
+        fi
+        
+        # 检查是否有自定义文件
+        if [ -d "../files" ]; then
+          echo "应用自定义文件"
+          cp -r "../files" .
+        fi
+        
+        # 检查并执行自定义脚本
+        if [ -f "../diy-part1.sh" ] && [ -x "../diy-part1.sh" ]; then
+          echo "执行 diy-part1.sh"
+          ../diy-part1.sh
         fi
 
-        # 执行自定义脚本
-        [ -x $GITHUB_WORKSPACE/$DIY_P1_SH ] && $GITHUB_WORKSPACE/$DIY_P1_SH
-
-    - name: 更新和安装Feeds（修复版）
+    - name: 更新和安装软件源
       run: |
         cd openwrt
         
-        echo "=== 更新Feeds ==="
+        echo "=== 更新软件源 ==="
         ./scripts/feeds update -a
         
-        echo "=== 安装基础包 ==="
-        # 先安装基础包，避免依赖问题
+        echo "=== 安装软件包 ==="
+        # 分步骤安装，避免依赖问题
         ./scripts/feeds install -a -p packages
         ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a -p routing
         
-        echo "=== 安装telephony包（跳过有问题的包）==="
-        # 单独安装telephony包，跳过有问题的包
-        for pkg in $(./scripts/feeds list -r telephony | cut -d' ' -f2); do
-          case "$pkg" in
-            libpcre|*freeswitch*|*kamailio*)
-              echo "跳过有问题的包: $pkg"
-              ;;
-            *)
-              echo "安装包: $pkg"
-              ./scripts/feeds install -p telephony $pkg || true
-              ;;
-          esac
-        done
+        # 选择性安装telephony包，跳过有问题的
+        ./scripts/feeds install -p telephony rem || true
+        ./scripts/feeds install -p telephony coturn || true
+        ./scripts/feeds install -p telephony libosip2 || true
         
-        echo "=== 安装其他包 ==="
+        # 安装其他包
         ./scripts/feeds install -a
 
-    - name: 应用配置
+    - name: 应用最终配置
       run: |
         cd openwrt
-        [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
-        [ -x $GITHUB_WORKSPACE/$DIY_P2_SH ] && $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # 执行第二阶段自定义脚本
+        if [ -f "../diy-part2.sh" ] && [ -x "../diy-part2.sh" ]; then
+          echo "执行 diy-part2.sh"
+          ../diy-part2.sh
+        fi
+        
+        echo "生成最终配置"
+        make defconfig
+        
+        echo "显示目标设备配置:"
+        grep "CONFIG_TARGET" .config | grep "=y" || true
 
     - name: 下载软件包
       run: |
         cd openwrt
-        make defconfig
         echo "开始下载软件包..."
-        make download -j$(nproc) || make download -j1
-        # 清理无效下载
-        find dl -size -1024c -delete 2>/dev/null || true
+        make download -j2 || make download -j1
+        
+        # 检查下载结果
+        echo "下载的软件包:"
+        ls -la dl/ | head -10
+        echo "dl目录大小:"
+        du -sh dl/
 
-    - name: 编译固件（安全模式）
+    - name: 编译固件
       id: compile
       run: |
         cd openwrt
         
-        echo "=== 开始编译 ==="
-        echo "资源状态:"
+        echo "=== 开始编译固件 ==="
+        echo "编译前资源状态:"
         free -h
         df -h
         
-        # 安全编译模式
-        echo "使用安全编译模式（单线程）..."
-        make -j1 V=s || make -j1 V=sc
+        # 根据可用内存设置编译线程
+        AVAILABLE_MEM=$(free -g | awk 'NR==2{print $7}')
+        echo "可用内存: ${AVAILABLE_MEM}G"
+        
+        if [ "$AVAILABLE_MEM" -lt 2 ]; then
+          JOBS=1
+          echo "内存较少，使用单线程编译"
+        elif [ "$AVAILABLE_MEM" -lt 4 ]; then
+          JOBS=2
+          echo "内存中等，使用2线程编译"
+        else
+          JOBS=$(($(nproc) > 4 ? 4 : $(nproc)))
+          echo "内存充足，使用 $JOBS 线程编译"
+        fi
+        
+        echo "开始编译，使用 $JOBS 线程..."
+        make -j$JOBS
         
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        
+        # 获取设备名称
+        if grep -q '^CONFIG_TARGET.*DEVICE.*=y' .config; then
+          DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | head -1 | sed -r 's/.*DEVICE_(.*)=y/\1/')
+          echo "DEVICE_NAME=_${DEVICE_NAME}" >> $GITHUB_ENV
+        else
+          echo "DEVICE_NAME=sl3000" >> $GITHUB_ENV
+        fi
+        
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 整理输出
+    - name: 整理固件文件
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
-        rm -rf packages
+        echo "=== 固件文件 ==="
+        ls -la
+        
+        # 删除不必要的文件
+        rm -rf packages 2>/dev/null || true
+        
+        echo "固件文件列表:"
+        find . -type f -name "*.bin" -o -name "*.img" -o -name "*.gz" | sort
+        
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
-    - name: 上传固件
-      uses: actions/upload-artifact@v4
+    - name: 上传固件制品
       if: steps.compile.outputs.status == 'success' && !cancelled()
+      uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt_固件_${{ env.FILE_DATE }}
+        name: OpenWrt固件_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}/*
-        retention-days: 7
+        retention-days: 30
 
-    - name: 发布Release
+    - name: 发布到 GitHub Release
       if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: ${{ env.FIRMWARE }}/*
-        tag_name: build_${{ env.FILE_DATE }}
-        name: 编译完成 ${{ env.FILE_DATE }}
+        tag_name: build-${{ env.FILE_DATE }}
+        name: SL-3000 固件 ${{ env.FILE_DATE }}
         body: |
-          🚀 OpenWrt 固件编译完成
-          - 时间: ${{ env.FILE_DATE }}
-          - 源码: ${{ env.REPO_URL }}
+          # 司洛 SL-3000 OpenWrt 固件
+          
+          🚀 **自动编译完成**
+          
+          - **编译时间**: ${{ env.FILE_DATE }}
+          - **设备型号**: 司洛 SL-3000
+          - **源码版本**: ${{ env.REPO_BRANCH }}
+          - **源码仓库**: ${{ env.REPO_URL }}
+          
+          ## 使用说明
+          
+          1. 选择对应的固件文件刷入
+          2. 首次使用建议恢复出厂设置
+          3. 如有问题请提交 Issue
+          
+          ## 文件列表
+          
+          详见 Artifacts 或 Release 文件列表
         draft: false
         prerelease: false
+
+    - name: 编译完成通知
+      if: always()
+      run: |
+        if [ "${{ steps.compile.outputs.status }}" = "success" ]; then
+          echo "🎉 固件编译成功!"
+          echo "📁 固件位置: ${{ env.FIRMWARE }}"
+        else
+          echo "❌ 编译失败"
+          exit 1
+        fi
