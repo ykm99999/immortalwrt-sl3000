@@ -1,17 +1,7 @@
-name: 司洛SL-3000 ImmortalWrt 编译
+name: SL3000 Build
 
 on:
   workflow_dispatch:
-    inputs:
-      skip_problematic:
-        description: '跳过有问题的驱动'
-        required: false
-        default: true
-        type: boolean
-
-env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
-  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -22,49 +12,44 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: 安装编译依赖
+    - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential ccache libssl-dev libncurses5-dev gawk gettext
+        sudo apt-get install -y build-essential libssl-dev libncurses5-dev gawk gettext
 
-    - name: 克隆源码
+    - name: Clone Source
       run: |
-        git clone --depth=1 $REPO_URL openwrt
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    - name: 配置环境
+    - name: Setup Environment
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 创建配置
+    - name: Create Config
       run: |
         cd openwrt
-        cat > .config << 'EOF'
-CONFIG_TARGET_mediatek_mt7981=y
-CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=256
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
-CONFIG_PACKAGE_kmod-mt7981-firmware=y
-EOF
+        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
+        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
         make defconfig
 
-    - name: 下载软件包
+    - name: Download Packages
       run: |
         cd openwrt
         make download -j2
 
-    - name: 编译固件
+    - name: Compile Firmware
       run: |
         cd openwrt
         make -j2
 
-    - name: 上传固件
+    - name: Upload Firmware
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: SL3000-固件
+        name: SL3000-Firmware
         path: openwrt/bin/targets/**/*
         retention-days: 30
