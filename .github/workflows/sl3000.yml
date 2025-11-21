@@ -1,4 +1,4 @@
-name: SL3000 Build with Checkpoint Resume
+name: SL3000 Build
 
 on:
   workflow_dispatch:
@@ -13,116 +13,52 @@ on:
         required: false
         default: 'false'
         type: boolean
-      resume_from:
-        description: 'Resume from specific checkpoint'
-        required: false
-        default: ''
-        type: choice
-        options:
-          - ''
-          - 'feeds'
-          - 'download'
-          - 'compile_toolchain'
-          - 'compile_kernel'
-          - 'compile_packages'
-          - 'final_image'
 
 env:
   CCACHE_DIR: /tmp/ccache
   CCACHE_MAXSIZE: 2G
-  BUILD_DIR: /tmp/openwrt-build
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    
-    strategy:
-      matrix:
-        include:
-          - device: sl_3000-emmc
-            subtarget: mt7981
-            target: mediatek
 
     steps:
-    - name: Checkout Config
+    - name: Checkout
       uses: actions/checkout@v4
-      with:
-        path: config-files
 
     - name: Setup Disk Space
       run: |
-        echo "=== Initial Disk Space Cleanup ==="
-        sudo apt-get autoremove -y --purge
+        sudo apt-get autoremove -y
         sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/*
-        sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
-        
-        echo "=== Disk Space After Cleanup ==="
         df -h
 
     - name: Install Dependencies
       run: |
-        echo "=== Installing Dependencies ==="
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          libssl-dev \
-          libncurses5-dev \
-          gawk \
-          gettext \
-          unzip \
-          python3 \
-          subversion \
-          git \
-          wget \
-          curl \
-          file \
-          rsync \
-          ccache
+        sudo apt-get install -y build-essential
+        sudo apt-get install -y libssl-dev libncurses5-dev
+        sudo apt-get install -y gawk gettext unzip python3
+        sudo apt-get install -y subversion git-core wget curl
         sudo apt-get clean
-
-    - name: Restore Build Cache
-      uses: actions/cache@v4
-      id: cache-restore
-      with:
-        path: |
-          /tmp/openwrt-build
-          /tmp/ccache
-          /tmp/dl-cache
-        key: openwrt-sl3000-${{ github.sha }}
-        restore-keys: |
-          openwrt-sl3000-
 
     - name: Clone Source
       run: |
-        echo "=== Cloning Source ==="
-        mkdir -p /tmp/openwrt-build
-        cd /tmp/openwrt-build
-        
-        git clone \
-          --depth=1 \
-          --single-branch \
-          --branch main \
-          https://github.com/padavanonly/immortalwrt-mt798x \
-          openwrt
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
+
+    - name: Fix Feeds
+      run: |
+        cd openwrt
+        sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
 
     - name: Setup Feeds
       run: |
-        echo "=== Setting up Feeds ==="
-        cd /tmp/openwrt-build/openwrt
-        
-        # 精简feeds配置
-        sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
-        sed -i 's|src-git kiddin9|# src-git kiddin9|' feeds.conf.default
-        
+        cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Apply Configuration
       run: |
-        echo "=== Applying Configuration ==="
-        cd /tmp/openwrt-build/openwrt
-        
+        cd openwrt
         # 创建基础配置
         cat > .config << 'EOF'
 CONFIG_TARGET_mediatek=y
@@ -138,65 +74,24 @@ CONFIG_TARGET_ROOTFS_PARTSIZE=512
 EOF
 
         # 应用完整配置
-        if [ -d "/home/runner/work/_temp/config-files" ]; then
-          find /home/runner/work/_temp/config-files -name "*.config" -exec cat {} >> .config \;
+        if [ -f "../.config" ]; then
+          cat "../.config" >> .config
         fi
         
         make defconfig
 
-    - name: Download Sources
+    - name: Download
       run: |
-        echo "=== Downloading Sources ==="
-        cd /tmp/openwrt-build/openwrt
-        
-        # 使用缓存目录
-        mkdir -p /tmp/dl-cache
-        [ -d dl ] && rm -rf dl
-        ln -sf /tmp/dl-cache dl
-        
+        cd openwrt
         make download -j2
 
     - name: Compile
       run: |
-        echo "=== Starting Compilation ==="
-        cd /tmp/openwrt-build/openwrt
-        
-        # 使用ccache加速编译
-        export CCACHE_DIR=/tmp/ccache
-        export CCACHE_MAXSIZE=2G
-        
-        # 分步骤编译以避免内存不足
-        echo "Step 1: Compiling toolchain..."
-        make toolchain/install -j$(nproc) || make toolchain/install -j1
-        
-        echo "Step 2: Compiling kernel..."
-        make target/linux/compile -j$(nproc) || make target/linux/compile -j1
-        
-        echo "Step 3: Compiling packages..."
-        make package/compile -j$(nproc) || make package/compile -j1
-        
-        echo "Step 4: Creating final image..."
-        make -j$(nproc) || make -j1
-
-    - name: Save Build Cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          /tmp/openwrt-build
-          /tmp/ccache
-          /tmp/dl-cache
-        key: openwrt-sl3000-${{ github.sha }}
+        cd openwrt
+        make -j2
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: sl3000-firmware
-        path: /tmp/openwrt-build/openwrt/bin/targets/**/*
-        retention-days: 7
-
-    - name: Cleanup on Success
-      if: success()
-      run: |
-        echo "=== Build Completed Successfully ==="
-        # 显示最终固件信息
-        find /tmp/openwrt-build/openwrt/bin/targets -name "*.bin" -o -name "*.img" | head -5
+        name: firmware
+        path: openwrt/bin/targets/**/*
