@@ -1,282 +1,161 @@
-name: SL-3000 Firmware Build
+#
+# https://github.com/P3TERX/Actions-OpenWrt
+#
+# File: .github/workflows/openwrt-bulder.yml
+# Description: Build OpenWrt using GitHub Actions
+#
+# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
+
+name: 司洛SL-3000 EMMC
 
 on:
+  repository_dispatch:
   workflow_dispatch:
-    inputs:
-      skip_upload:
-        description: 'Skip firmware upload'
-        required: false
-        default: false
-        type: boolean
-
-permissions:
-  contents: write
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: 2410
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: sl3000.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  CCACHE_DIR: /workdir/.ccache
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
 
     steps:
-      # Step 1: Checkout code
-      - name: Checkout code and config
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@main
 
-      # Step 2: Verify config file
-      - name: Verify configuration file
-        id: config_check
-        run: |
-          echo "=== Checking configuration file ==="
-          if [ ! -f "sl3000.config" ]; then
-            echo "❌ Error: sl3000.config not found"
-            ls -la
-            exit 1
-          fi
-          echo "✅ Configuration file found"
-          echo "config_status=success" >> $GITHUB_OUTPUT
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
-      # Step 3: 深度清理磁盘空间（加强版）
-      - name: Deep clean disk space
-        run: |
-          echo "=== Starting deep disk cleanup ==="
-          echo "Initial disk usage:"
-          df -h
-          
-          # 清理系统缓存
-          echo "Cleaning system caches..."
-          sudo sync
-          echo 3 | sudo tee /proc/sys/vm/drop_caches
-          
-          # 清理各种开发环境和缓存
-          echo "Removing development environments..."
-          sudo rm -rf \
-            /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /opt/hostedtoolcache/* \
-            /usr/local/share/chromium \
-            /usr/local/lib/node_modules \
-            /usr/local/share/powershell \
-            /image \
-            /opt/microsoft \
-            /opt/pipx
-          
-          # 清理 Docker
-          echo "Cleaning Docker images..."
-          sudo docker system prune -af 2>/dev/null || true
-          
-          # 清理 APT 缓存
-          echo "Cleaning APT cache..."
-          sudo apt-get autoremove -y
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
-          
-          # 清理日志文件
-          echo "Cleaning log files..."
-          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \; 2>/dev/null || true
-          sudo journalctl --vacuum-time=1h
-          
-          # 清理临时文件
-          echo "Cleaning temporary files..."
-          sudo rm -rf /tmp/* /var/tmp/*
-          
-          # 清理旧内核（如果有）
-          echo "Cleaning old kernels..."
-          sudo dpkg -l | grep -E "linux-(headers|image|modules)-[0-9]" | grep -v $(uname -r) | awk '{print $2}' | xargs sudo apt-get remove -y 2>/dev/null || true
-          
-          echo "=== Disk usage after cleanup ==="
-          df -h
-          echo "✅ Deep disk cleanup completed"
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      # Step 4: Initialize environment
-      - name: Initialize build environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          echo "=== Installing build dependencies ==="
-          sudo apt-get update -qq
-          sudo apt-get install -qq \
-            build-essential ccache cmake curl device-tree-compiler \
-            flex gawk gettext git libncurses5-dev libssl-dev \
-            make patch pkgconf python3 python3-pip \
-            rsync subversion unzip wget zlib1g-dev
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
 
-          # Setup swap file for memory
-          echo "Setting up swap file..."
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
 
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
 
-          echo "=== Memory information ==="
-          free -h
+    - name: Load custom configuration
+      run: |
+        [ -e files ] && mv files openwrt/files
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      # Step 5: Configure build cache
-      - name: Configure build cache
-        run: |
-          sudo mkdir -p $CCACHE_DIR
-          sudo chown -R $USER:$GROUPS $CCACHE_DIR
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          ccache -o compression=true
-          ccache -o max_size=1G
-          ccache -s
+    - name: Download package
+      id: package
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
-      # Step 6: Clone source code
-      - name: Clone source code
-        working-directory: /workdir
-        run: |
-          echo "=== Cloning source code ==="
-          if [ ! -d "openwrt" ]; then
-            git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
-          else
-            cd openwrt
-            git fetch --depth=1 origin $REPO_BRANCH
-            git reset --hard origin/$REPO_BRANCH
-          fi
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-          
-          echo "Disk usage after cloning:"
-          df -h
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      # Step 7: Update feeds
-      - name: Update and install feeds
-        run: |
-          cd openwrt
-          echo "=== Updating feeds ==="
-          if ! grep -q "passwall2" feeds.conf.default; then
-            echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
-          fi
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
 
-      # Step 8: Apply configuration
-      - name: Apply configuration
-        run: |
-          cp sl3000.config openwrt/.config
-          cd openwrt
-          make defconfig
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
 
-      # Step 9: Download dependencies
-      - name: Download dependencies
-        run: |
-          cd openwrt
-          echo "=== Downloading dependencies ==="
-          make download -j2
-          echo "Disk usage after downloads:"
-          df -h
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
 
-      # Step 10: 编译前再次清理缓存
-      - name: Pre-build cache cleanup
-        run: |
-          echo "=== Pre-build cache cleanup ==="
-          sudo sync
-          echo 3 | sudo tee /proc/sys/vm/drop_caches
-          free -h
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
 
-      # Step 11: Build firmware
-      - name: Build firmware
-        id: compile
-        env:
-          CCACHE_DIR: ${{ env.CCACHE_DIR }}
-        run: |
-          cd openwrt
-          echo "=== Starting firmware build ==="
-          echo "CPU cores: $(nproc)"
-          echo "Memory before build:"
-          free -h
-          
-          export CCACHE_DIR="$CCACHE_DIR"
-          
-          if make -j2; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          elif make -j1 V=s; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-          echo "Disk usage after build:"
-          df -h
+    - name: Generate release tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        touch release.txt
+        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
 
-      # Step 12: Check build results
-      - name: Check build results
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          cd openwrt/bin/targets
-          echo "=== Build results ==="
-          find . -name "*.bin" -o -name "*.img" | while read file; do
-            echo "Firmware: $file ($(du -h "$file" | cut -f1))"
-          done
-          echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
+    - name: 发布固件至Release
+      uses: softprops/action-gh-release@v2.1.0
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        files: ${{ env.FIRMWARE }}/*
+        name: ${{ env.FILE_DATE }}-${{ env.OPENWRT_NAME }}-${{ env.UPLOAD_TAG_NAME }}${{ env.WIFI_VERSION }}${{ env.EEPROM }}${{ env.BUILD_DOCKERMAN }}
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
 
-      # Step 13: Upload artifacts
-      - name: Upload firmware artifacts
-        if: steps.compile.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: SL3000-Firmware-$(date +%Y%m%d)
-          path: openwrt/bin/targets/**/*
-          retention-days: 7
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2
 
-      # Step 14: Create release
-      - name: Create GitHub release
-        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled() && !inputs.skip_upload
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: sl3000-$(date +%Y%m%d)
-          name: SL-3000 Firmware $(date +%Y%m%d)
-          body: |
-            # SL-3000 ImmortalWrt Firmware
-
-            ## Firmware Information
-            - **Device**: SL-3000 (MT7981)
-            - **System**: ImmortalWrt 24.10
-            - **Kernel**: Linux 6.6
-            - **Build Time**: $(date)
-
-            ## Features
-            - Passwall2
-            - Docker support
-            - LuCI interface
-            - Chinese language
-
-            ## Installation
-            1. Enter factory upgrade page
-            2. Select firmware file
-            3. Wait for reboot
-          files: ${{ env.FIRMWARE_PATH }}/**/*
-
-      # Step 15: 最终磁盘使用报告
-      - name: Final disk usage report
-        if: always()
-        run: |
-          echo "=== Final disk usage report ==="
-          df -h
-          echo "=== Memory usage report ==="
-          free -h
-          echo "=== CCache statistics ==="
-          ccache -s
-
-      # Step 16: Cleanup swap file
-      - name: Cleanup swap file
-        if: always()
-        run: |
-          sudo swapoff /swapfile 2>/dev/null || true
-          sudo rm -f /swapfile 2>/dev/null || true
-          echo "✅ Swap file cleaned up"
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@master
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
