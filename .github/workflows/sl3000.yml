@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
@@ -20,40 +20,43 @@ jobs:
         sudo apt-get install -y subversion git wget curl
         sudo apt-get clean
 
-    - name: Clone OpenWrt source
+    - name: Clone Source
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    - name: Setup feeds
+    - name: Remove Problematic Feeds
+      run: |
+        cd openwrt
+        # 完全移除 modemfeed
+        sed -i '/modemfeed/d' feeds.conf.default
+        # 或者注释掉所有不必要的 feeds
+        sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
+        sed -i 's|src-git kiddin9|# src-git kiddin9|' feeds.conf.default
+
+    - name: Setup Feeds
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Apply configuration
+    - name: Apply Configuration
       run: |
         cd openwrt
-        if [ -f "../.config" ]; then
-          cp ../.config .config
-        else
-          echo "Error: .config file not found in repository root"
-          exit 1
-        fi
+        cp ../.config .config
         make defconfig
 
-    - name: Download packages
+    - name: Download
       run: |
         cd openwrt
         make download -j2
 
-    - name: Compile firmware
+    - name: Compile
       run: |
         cd openwrt
         make -j2
 
-    - name: Upload firmware artifacts
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: firmware
         path: openwrt/bin/targets/**/*
-        retention-days: 7
