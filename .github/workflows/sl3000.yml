@@ -1,39 +1,119 @@
-name: 司洛SL-3000 极简编译
+name: 司洛SL-3000 ImmortalWrt 编译
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_problematic:
+        description: '跳过有问题的驱动'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: 安装依赖
+    - name: 安装编译依赖
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libssl-dev libncurses5-dev gawk gettext
+        sudo apt-get install -y build-essential ccache libssl-dev libncurses5-dev gawk gettext
+
+    - name: 配置缓存
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.ccache
+          ./openwrt/dl
+        key: ${{ runner.os }}-sl3000-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-sl3000-
 
     - name: 克隆源码
       run: |
+        echo "=== 克隆源码 ==="
+        # 先检查可用的分支
+        git ls-remote --heads $REPO_URL | grep -E "heads/(main|master|2410)" || echo "未找到常见分支"
+        
+        # 克隆源码
+        git clone --depth=1 --branch $REPO_BRANCH $REPO_URL openwrt || \
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    - name: 配置和编译
+    - name: 修复已知问题
+      run: |
+        cd openwrt
+        
+        echo "=== 修复已知问题 ==="
+        
+        # 修复 WARP 驱动错误
+        if [ -f "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" ] && [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          echo "修复 WARP 驱动..."
+          sed -i 's/WED_EX_INT_STA_FLD_TF_TKID_TITO_INVLD/WED_EX_INT_STA_FLD_TF_TKID_FIFO_INVLD/g' "package/mtk/drivers/warp/regs/reg_v1/warp_hw_v1.c" 2>/dev/null || true
+        fi
+        
+        # 跳过有问题的驱动
+        if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          echo "跳过有问题的驱动..."
+          rm -rf package/mtk/drivers/conninfra 2>/dev/null || true
+          rm -rf package/mtk/drivers/wifi-profile 2>/dev/null || true
+        fi
+
+    - name: 配置环境
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+
+    - name: 创建配置
+      run: |
+        cd openwrt
         
-        # 极简配置
-        echo "CONFIG_TARGET_mediatek_mt7981=y" > .config
-        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> .config
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config
-        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        echo "=== 创建配置 ==="
+        cat > .config << 'EOF'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_mt7981=y
+CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-nand-ubootmod=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=256
+CONFIG_CCACHE=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+CONFIG_PACKAGE_kmod-mt7981-firmware=y
+CONFIG_PACKAGE_kmod-mt7915e=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_fdisk=y
+EOF
+
+        # 根据选择添加禁用配置
+        if [ "${{ github.event.inputs.skip_problematic }}" = "true" ]; then
+          echo "# CONFIG_PACKAGE_kmod-mtk-warp is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-mtk-conninfra is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-mtk-wifi-profile is not set" >> .config
+        fi
         
         make defconfig
+
+    - name: 下载软件包
+      run: |
+        cd openwrt
         make download -j2
+
+    - name: 编译固件
+      run: |
+        cd openwrt
+        echo "开始编译..."
         make -j2
 
     - name: 上传固件
@@ -42,3 +122,4 @@ jobs:
       with:
         name: SL3000-固件
         path: openwrt/bin/targets/**/*
+        retention-days: 30
