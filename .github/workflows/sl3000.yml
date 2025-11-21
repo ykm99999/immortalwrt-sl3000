@@ -2,96 +2,58 @@ name: SL3000 Build
 
 on:
   workflow_dispatch:
-    inputs:
-      skip_docker:
-        description: 'Skip Docker to save space'
-        required: false
-        default: 'false'
-        type: boolean
-      skip_passwall:
-        description: 'Skip PassWall2 to save space'
-        required: false
-        default: 'false'
-        type: boolean
-
-env:
-  CCACHE_DIR: /tmp/ccache
-  CCACHE_MAXSIZE: 2G
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Disk Space
-      run: |
-        sudo apt-get autoremove -y
-        sudo apt-get clean
-        df -h
-
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
         sudo apt-get install -y libssl-dev libncurses5-dev
         sudo apt-get install -y gawk gettext unzip python3
-        sudo apt-get install -y subversion git-core wget curl
+        sudo apt-get install -y subversion git wget curl
         sudo apt-get clean
 
-    - name: Clone Source
+    - name: Clone OpenWrt source
       run: |
         git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x openwrt
 
-    - name: Fix Feeds
-      run: |
-        cd openwrt
-        sed -i 's|src-git modemfeed|# src-git modemfeed|' feeds.conf.default
-
-    - name: Setup Feeds
+    - name: Setup feeds
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Apply Configuration
+    - name: Apply configuration
       run: |
         cd openwrt
-        # 创建基础配置
-        cat > .config << 'EOF'
-CONFIG_TARGET_mediatek=y
-CONFIG_TARGET_mediatek_mt7981=y
-CONFIG_TARGET_mediatek_mt7981_DEVICE_sl_3000-emmc=y
-CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"
-CONFIG_DEFAULT_TARGET_OPTIMIZATION="-Os -pipe -mcpu=cortex-a53 -mtune=cortex-a53"
-CONFIG_CPU_TYPE="cortex-a53"
-CONFIG_LINUX_5_4=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_ROOTFS_PARTSIZE=512
-EOF
-
-        # 应用完整配置
         if [ -f "../.config" ]; then
-          cat "../.config" >> .config
+          cp ../.config .config
+        else
+          echo "Error: .config file not found in repository root"
+          exit 1
         fi
-        
         make defconfig
 
-    - name: Download
+    - name: Download packages
       run: |
         cd openwrt
         make download -j2
 
-    - name: Compile
+    - name: Compile firmware
       run: |
         cd openwrt
         make -j2
 
-    - name: Upload Artifacts
+    - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
       with:
         name: firmware
         path: openwrt/bin/targets/**/*
+        retention-days: 7
