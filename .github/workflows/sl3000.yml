@@ -1,7 +1,7 @@
 name: Build ImmortalWrt SL3000
 
 on:
-  workflow_dispatch:   # 只允许手动触发，不会因为 push 自动运行
+  workflow_dispatch:   # 手动触发
 
 jobs:
   build:
@@ -26,39 +26,61 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: Patch SL3000 device
+      run: |
+        cd immortalwrt
+        # 添加 DTS 文件
+        cat > target/linux/mediatek/dts/mt7981-siluo-sl3000.dts <<'EOF'
+        /dts-v1/;
+
+        #include "mt7981.dtsi"
+
+        / {
+            model = "Siluo SL-3000";
+            compatible = "siluo,sl3000", "mediatek,mt7981";
+
+            chosen {
+                bootargs = "console=ttyS0,115200n8";
+            };
+
+            memory {
+                reg = <0x40000000 0x20000000>; /* 示例：512MB RAM */
+            };
+
+            aliases {
+                led-boot = &led_status;
+            };
+
+            leds {
+                compatible = "gpio-leds";
+                led_status: status {
+                    label = "sl3000:green:status";
+                    gpios = <&pio 12 GPIO_ACTIVE_HIGH>;
+                };
+            };
+        };
+        EOF
+
+        # 修改 mt7981.mk 添加设备定义
+        echo '
+        define Device/siluo_sl3000
+          DEVICE_VENDOR := Siluo
+          DEVICE_MODEL := SL-3000
+          DEVICE_DTS := mt7981-siluo-sl3000
+          DEVICE_PACKAGES := kmod-mt7981-wifi uboot-envtools
+        endef
+        TARGET_DEVICES += siluo_sl3000
+        ' >> target/linux/mediatek/image/mt7981.mk
+
     - name: Copy custom config
       run: |
         cp sl3000.config immortalwrt/.config
-
-    - name: Force target check
-      run: |
-        cd immortalwrt
-        # 确保目标设备是 siluo_sl3000
-        echo "CONFIG_TARGET_mediatek=y" >> .config
-        echo "CONFIG_TARGET_mediatek_mt7981=y" >> .config
-        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y" >> .config
-        make defconfig
-        grep siluo_sl3000 .config || (echo "设备未正确配置！" && exit 1)
-
-    - name: Customize firmware
-      run: |
-        cd immortalwrt
-        # 修改默认 IP
-        sed -i 's/192.168.1.1/192.168.6.1/g' package/base-files/files/bin/config_generate
-        # 替换 LuCI Logo（支持 logo.jpeg，且目录存在时才执行）
-        if [ -f ../logo.jpeg ] && [ -d package/luci-theme-bootstrap/htdocs/luci-static/bootstrap ]; then
-          cp ../logo.jpeg package/luci-theme-bootstrap/htdocs/luci-static/bootstrap/logo.png
-        fi
-        # 修改登录 Banner
-        echo "Welcome to 司络 SL-3000 ImmortalWrt" > package/base-files/files/etc/banner
 
     - name: Build firmware
       run: |
         cd immortalwrt
         make defconfig
-        make toolchain/clean
-        make toolchain/install
-        make -j1 V=s
+        make -j$(nproc) V=s
 
     - name: Upload firmware to Release
       uses: softprops/action-gh-release@v1
