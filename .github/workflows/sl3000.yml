@@ -30,6 +30,16 @@ jobs:
       run: |
         cp sl3000.config immortalwrt/.config
 
+    - name: Force target check
+      run: |
+        cd immortalwrt
+        # 确保目标设备是 siluo_sl3000
+        echo "CONFIG_TARGET_mediatek=y" >> .config
+        echo "CONFIG_TARGET_mediatek_mt7981=y" >> .config
+        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y" >> .config
+        make defconfig
+        grep siluo_sl3000 .config || (echo "设备未正确配置！" && exit 1)
+
     - name: Customize firmware
       run: |
         cd immortalwrt
@@ -46,10 +56,8 @@ jobs:
       run: |
         cd immortalwrt
         make defconfig
-        # 清理并重新生成工具链
         make toolchain/clean
         make toolchain/install
-        # 单线程编译，避免 kernel-headers 出错
         make -j1 V=s
 
     - name: Upload firmware to Release
@@ -60,7 +68,7 @@ jobs:
         draft: false
         prerelease: false
         files: |
-          immortalwrt/bin/targets/mediatek/mt7981/*.bin
-          immortalwrt/bin/targets/mediatek/mt7981/*.img
+          immortalwrt/bin/targets/mediatek/mt7981/*sl3000*.bin
+          immortalwrt/bin/targets/mediatek/mt7981/*sl3000*.itb
           immortalwrt/bin/targets/mediatek/mt7981/*.manifest
           immortalwrt/bin/targets/mediatek/mt7981/*.buildinfo
