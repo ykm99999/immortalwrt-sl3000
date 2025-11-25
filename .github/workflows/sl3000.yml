@@ -1,7 +1,7 @@
 name: Build Siluo SL-3000 ImmortalWrt Stable
 
 on:
-  workflow_dispatch:   # ✅ 只支持手动触发，不会因保存代码自动运行
+  workflow_dispatch:   # ✅ 只支持手动触发
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -57,6 +57,10 @@ jobs:
       run: |
         echo "Welcome to 司络 SL-3000 ImmortalWrt" | sudo tee openwrt/package/base-files/files/etc/banner
         cp $GITHUB_WORKSPACE/logo.jpeg openwrt/feeds/luci/themes/luci-theme-bootstrap/htdocs/luci-static/bootstrap/logo.png || true
+
+    - name: Set LAN IP
+      run: |
+        sed -i "s/192.168.1.1/192.168.6.1/g" openwrt/package/base-files/files/etc/config/network
 
     - name: Download package
       run: |
