@@ -10,8 +10,9 @@
         bootargs = "console=ttyS0,115200n8";
     };
 
+    /* 1GB DDR4 内存 */
     memory {
-        reg = <0x40000000 0x20000000>; /* 512MB RAM 示例 */
+        reg = <0x40000000 0x40000000>; /* 1GB = 0x40000000 */
     };
 
     aliases {
@@ -58,7 +59,7 @@
     };
 };
 
-/* 以太网配置 */
+/* 千兆以太网 */
 &gmac0 {
     status = "okay";
     phy-mode = "sgmii";
@@ -68,34 +69,43 @@
     };
 };
 
-/* 无线配置 */
+/* WiFi6 AX3000 */
 &wifi {
     status = "okay";
 };
 
-/* SPI-NAND/闪存配置 */
-&spi0 {
+/* eMMC 存储 */
+&mmc0 {
     status = "okay";
+    bus-width = <8>;
+    non-removable;
+    cap-mmc-highspeed;
+    cap-mmc-hs200;
+    cap-mmc-hs400;
+    mmc-hs400-1_8v;
+    vmmc-supply = <&mt7981_regulator>;
+    vqmmc-supply = <&mt7981_regulator>;
 
-    flash@0 {
-        compatible = "spi-nand";
-        reg = <0>;
-        spi-max-frequency = <50000000>;
-        partitions {
-            compatible = "fixed-partitions";
-            #address-cells = <1>;
-            #size-cells = <1>;
+    /* 分区定义，根据实际需求调整 */
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
 
-            partition@0 {
-                label = "u-boot";
-                reg = <0x0000000 0x100000>;
-                read-only;
-            };
+        partition@0 {
+            label = "bootloader";
+            reg = <0x00000000 0x02000000>; /* 32MB */
+            read-only;
+        };
 
-            partition@100000 {
-                label = "firmware";
-                reg = <0x100000 0x7f00000>;
-            };
+        partition@2000000 {
+            label = "firmware";
+            reg = <0x02000000 0x70000000>; /* 1792MB */
+        };
+
+        partition@72000000 {
+            label = "userdata";
+            reg = <0x72000000 0x06000000>; /* 96MB */
         };
     };
 };
