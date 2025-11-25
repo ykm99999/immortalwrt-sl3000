@@ -12,7 +12,7 @@
 
     /* 1GB DDR4 内存 */
     memory {
-        reg = <0x40000000 0x40000000>; /* 1GB = 0x40000000 */
+        reg = <0x40000000 0x40000000>; /* 1GB */
     };
 
     aliases {
@@ -63,6 +63,7 @@
 &gmac0 {
     status = "okay";
     phy-mode = "sgmii";
+    /* 如果有外部 PHY，请改为 phy-handle 指向对应节点 */
     fixed-link {
         speed = <1000>;
         full-duplex;
@@ -72,9 +73,49 @@
 /* WiFi6 AX3000 */
 &wifi {
     status = "okay";
+    /* 建议增加 EEPROM 校准数据引用 */
+    mediatek,eeprom = <&factory 0x0000>;
 };
 
-/* eMMC 存储 */
+/* SPI-NOR 32MB */
+&spi0 {
+    status = "okay";
+
+    flash@0 {
+        compatible = "jedec,spi-nor";
+        reg = <0>;
+        spi-max-frequency = <50000000>;
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            partition@0 {
+                label = "bootloader";
+                reg = <0x00000000 0x00100000>; /* 1MB */
+                read-only;
+            };
+
+            partition@100000 {
+                label = "config";
+                reg = <0x00100000 0x00100000>; /* 1MB */
+            };
+
+            partition@200000 {
+                label = "factory";
+                reg = <0x00200000 0x00100000>; /* 1MB */
+            };
+
+            partition@300000 {
+                label = "reserved";
+                reg = <0x00300000 0x01D00000>; /* 29MB */
+            };
+        };
+    };
+};
+
+/* eMMC 128GB */
 &mmc0 {
     status = "okay";
     bus-width = <8>;
@@ -86,26 +127,19 @@
     vmmc-supply = <&mt7981_regulator>;
     vqmmc-supply = <&mt7981_regulator>;
 
-    /* 分区定义，根据实际需求调整 */
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;
         #size-cells = <1>;
 
         partition@0 {
-            label = "bootloader";
-            reg = <0x00000000 0x02000000>; /* 32MB */
-            read-only;
-        };
-
-        partition@2000000 {
             label = "firmware";
-            reg = <0x02000000 0x70000000>; /* 1792MB */
+            reg = <0x00000000 0x700000000>; /* 112GB */
         };
 
-        partition@72000000 {
+        partition@700000000 {
             label = "userdata";
-            reg = <0x72000000 0x06000000>; /* 96MB */
+            reg = <0x700000000 0x100000000>; /* 16GB */
         };
     };
 };
