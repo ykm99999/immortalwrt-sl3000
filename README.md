@@ -1,55 +1,73 @@
-# 司络 SL-3000 EMMC 固件说明
+# 司络 SL-3000 路由器固件说明
 
-## 📦 固件版本概述
-- **基线系统**：ImmortalWrt 24.10  
-- **内核版本**：Linux 6.6  
-- **目标设备**：司络 SL-3000（MT7981 芯片，EMMC 存储）  
-- **构建特点**：
-  - 移除所有旧依赖包（如 `libcrypt-compat`、`libpcre`、`python3-light` 等），避免编译失败
-  - 保留常用功能：Docker、Passwall2、TurboACC、Cloudflared、LuCI 中文界面
-  - 适合家庭和中小型网络环境，兼顾易用性和性能
-
----
-
-## 🔑 软件包功能介绍
-
-### 🖥️ 系统与管理
-- **LuCI Web 界面**：图形化管理界面，支持中文翻译  
-- **基础工具**：`bash`、`curl`、`wget`、`coreutils`  
-- **防火墙管理**：`luci-app-firewall`，可视化配置防火墙规则  
-
-### 🐳 Docker 支持
-- **luci-app-docker**：在 LuCI 界面管理 Docker 容器  
-- **dockerd / containerd**：完整的容器运行环境  
-- **文件系统支持**：ext4、btrfs、xfs，支持挂载外部存储运行容器  
-
-### 🌐 网络代理与加速
-- **Passwall2**：多协议代理工具，支持 V2Ray、Xray、Sing-box、TUIC 等后端  
-- **透明代理工具**：`dns2socks`、`ipt2socks`、`pdnsd-alt`、`chinadns-ng`  
-- **DNS 增强**：`dnsmasq-full`、`https-dns-proxy`，支持 DoH/DoT  
-- **TurboACC**：网络加速插件，启用 Shortcut-FE、Flow Offload 等内核加速模块  
-
-### ☁️ Cloudflared
-- **cloudflared**：Cloudflare 提供的安全隧道工具，可用于 DNS over HTTPS 或 Zero Trust 隧道  
-
-### 🔧 网络工具与内核模块
-- **iptables 扩展**：支持 TProxy、Conntrack、NAT 等高级功能  
-- **kmod-tun / kmod-sit**：支持 VPN 隧道与 IPv6 over IPv4  
-- **tcping / resolveip**：网络诊断工具  
+## 📡 路由器配置
+- **型号**：司络 SL-3000 (MT7981 平台)
+- **CPU**：联发科 MT7981 双核
+- **内存**：512MB DDR4
+- **闪存**：128MB NAND
+- **无线**：Wi-Fi 6 (2.4GHz + 5GHz)
+- **接口**：
+  - 1 × WAN 千兆口
+  - 3 × LAN 千兆口
+  - USB 3.0 × 1
+- **电源**：DC 12V / 2A
 
 ---
 
-## 🎯 使用场景
-- **家庭网络**：轻松管理防火墙、端口转发、DNS 加速  
-- **科学上网**：Passwall2 提供多种代理协议，适合复杂网络环境  
-- **容器化应用**：Docker 支持，可运行 Home Assistant、NAS 服务等  
-- **性能优化**：TurboACC 提升转发性能，适合千兆网络环境  
+## ⚙️ 固件配置
+- **固件版本**：ImmortalWrt 24.10 稳定版
+- **内核版本**：Linux 6.6 LTS
+- **编译方式**：GitHub Actions 自动编译
+- **自定义品牌**：
+  - LuCI Web 界面顶部 Logo：`司络 SL-3000`
+  - 登录 Banner：`Welcome to 司络 SL-3000 ImmortalWrt`
+- **功能支持**：
+  - LuCI 中文界面
+  - Docker 容器支持
+  - 在线升级 (Attended Sysupgrade)
+  - Wi-Fi 驱动完整支持
+  - IPv6 / NAT / 防火墙
+  - 自动策略组分流
 
 ---
 
-## ⚠️ 注意事项
-- 已移除所有 Python 包和旧依赖包，避免编译失败  
-- Workflow 中需使用 `make defconfig`，不要再调用 `olddefconfig`  
-- feeds 安装后会自动清理掉 `python-*` 包目录  
+## 📦 软件包配置
+### 网络代理
+- `luci-app-passwall2`  
+- `passwall2-core`  
+- `passwall2-ss` / `passwall2-ssr`  
+- `passwall2-v2ray` / `passwall2-xray`  
+- `passwall2-trojan`  
+- 可选增强：`passwall2-chinadns-ng`、`passwall2-dns2socks`
+
+### 系统工具
+- `luci-app-docker`（Docker 管理界面）
+- `luci-app-attendedsysupgrade`（在线升级）
+- `luci-app-opkg`（软件包管理）
+- `luci-app-firewall`（防火墙配置）
+
+### 网络服务
+- `luci-app-samba4`（文件共享）
+- `luci-app-upnp`（端口自动映射）
+- `luci-app-ddns`（动态域名解析）
+
+### 其他
+- `luci-i18n-base-zh-cn`（中文界面支持）
+- `luci-theme-bootstrap`（默认主题，可替换 Logo）
 
 ---
+
+## 🚀 使用说明
+1. 登录 Web 界面：`http://192.168.1.1`  
+2. 默认用户名：`root`  
+3. 默认密码：空（首次登录需设置密码）  
+4. 在 **服务 → PassWall2** 中配置代理节点和策略组  
+5. 在 **系统 → Docker** 中管理容器  
+6. 在 **系统 → 软件包** 中安装或更新其他功能  
+
+---
+
+## 📌 注意事项
+- 建议刷机后立即修改管理密码  
+- 使用代理功能时，请合理配置 DNS 分流，避免误判节点失效  
+- Logo 文件支持 PNG/JPEG，推荐透明背景 PNG，尺寸 120–200px × 40–60px
