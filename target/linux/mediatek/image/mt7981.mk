@@ -5,6 +5,13 @@ define Device/siluo_sl3000
   DEVICE_PACKAGES := \
     kmod-mt7981-wifi \
     uboot-envtools \
+    block-mount \
+    kmod-usb3 \
+    kmod-usb-storage \
+    kmod-fs-ext4 \
+    kmod-fs-vfat \
+    kmod-fs-exfat \
+    kmod-fs-ntfs3 \
     luci \
     luci-i18n-base-zh-cn \
     luci-theme-bootstrap \
