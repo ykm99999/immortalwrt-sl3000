@@ -1,0 +1,101 @@
+/dts-v1/;
+
+#include "mt7981.dtsi"
+
+/ {
+    model = "Siluo SL-3000";
+    compatible = "siluo,sl3000", "mediatek,mt7981";
+
+    chosen {
+        bootargs = "console=ttyS0,115200n8";
+    };
+
+    memory {
+        reg = <0x40000000 0x20000000>; /* 512MB RAM 示例 */
+    };
+
+    aliases {
+        led-boot = &led_status;
+        led-failsafe = &led_status;
+        led-running = &led_status;
+        led-upgrade = &led_status;
+        ethernet0 = &gmac0;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+
+        led_status: status {
+            label = "sl3000:green:status";
+            gpios = <&pio 12 GPIO_ACTIVE_HIGH>;
+        };
+
+        wan_led: wan {
+            label = "sl3000:blue:wan";
+            gpios = <&pio 13 GPIO_ACTIVE_HIGH>;
+        };
+
+        wifi_led: wifi {
+            label = "sl3000:green:wifi";
+            gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+        };
+    };
+
+    keys {
+        compatible = "gpio-keys";
+
+        reset {
+            label = "reset";
+            gpios = <&pio 15 GPIO_ACTIVE_LOW>;
+            linux,code = <KEY_RESTART>;
+        };
+
+        wps {
+            label = "wps";
+            gpios = <&pio 16 GPIO_ACTIVE_LOW>;
+            linux,code = <KEY_WPS_BUTTON>;
+        };
+    };
+};
+
+/* 以太网配置 */
+&gmac0 {
+    status = "okay";
+    phy-mode = "sgmii";
+    fixed-link {
+        speed = <1000>;
+        full-duplex;
+    };
+};
+
+/* 无线配置 */
+&wifi {
+    status = "okay";
+};
+
+/* SPI-NAND/闪存配置 */
+&spi0 {
+    status = "okay";
+
+    flash@0 {
+        compatible = "spi-nand";
+        reg = <0>;
+        spi-max-frequency = <50000000>;
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            partition@0 {
+                label = "u-boot";
+                reg = <0x0000000 0x100000>;
+                read-only;
+            };
+
+            partition@100000 {
+                label = "firmware";
+                reg = <0x100000 0x7f00000>;
+            };
+        };
+    };
+};
