@@ -1,7 +1,7 @@
-name: Build Siluo SL-3000 ImmortalWrt
+name: Build Siluo SL-3000 ImmortalWrt Stable
 
 on:
-  workflow_dispatch:   # ✅ 只支持手动触发
+  workflow_dispatch:   # ✅ 只支持手动触发，不会因保存代码自动运行
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -17,10 +17,11 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Init build environment
+    - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        sudo rm -rf /etc/apt/sources.list.d/*
         sudo apt-get -qq update
         sudo apt-get -qq install -y build-essential git libncurses5-dev gawk gettext unzip file libssl-dev wget python3 ccache
         sudo timedatectl set-timezone "$TZ"
@@ -31,6 +32,7 @@ jobs:
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift
         sudo docker image prune --all --force
+        sudo docker container prune --force
         sudo apt-get clean
         sudo apt-get autoremove --purge -y
         df -hT
@@ -41,7 +43,7 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load custom config
+    - name: Load custom configuration
       run: |
         [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
 
@@ -54,16 +56,16 @@ jobs:
     - name: Apply custom branding
       run: |
         echo "Welcome to 司络 SL-3000 ImmortalWrt" | sudo tee openwrt/package/base-files/files/etc/banner
-        cp $GITHUB_WORKSPACE/logo.png openwrt/feeds/luci/themes/luci-theme-bootstrap/htdocs/luci-static/bootstrap/logo.png || true
+        cp $GITHUB_WORKSPACE/logo.jpeg openwrt/feeds/luci/themes/luci-theme-bootstrap/htdocs/luci-static/bootstrap/logo.png || true
 
-    - name: Download packages
+    - name: Download package
       run: |
         cd openwrt
         make defconfig
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile firmware
+    - name: Compile the firmware
       run: |
         cd openwrt
         echo -e "$(nproc) threads compile"
@@ -78,7 +80,7 @@ jobs:
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: Siluo_SL3000_firmware
+        name: SL3000_firmware
         path: ${{ env.FIRMWARE }}
 
     - name: Release firmware
