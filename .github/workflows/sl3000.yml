@@ -1,7 +1,13 @@
-name: SL3000 Build
+name: Build SL-3000 ImmortalWrt Stable
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # ✅ 只支持手动触发，不会因保存代码自动运行
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-24.10
+  CONFIG_FILE: sl3000.config
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -11,157 +17,72 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Verify Config File
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        echo "=== Checking for Configuration Files ==="
-        ls -la *.config || echo "No config files found"
-        if [ -f "sl3000.config" ]; then
-          echo "Found sl3000.config file"
-          cp sl3000.config .config
-          echo "Copied sl3000.config to .config"
-        else
-          echo "Error: sl3000.config file not found!"
-          echo "Available files:"
-          ls -la
-          exit 1
-        fi
+        sudo rm -rf /etc/apt/sources.list.d/*
+        sudo apt-get -qq update
+        sudo apt-get -qq install -y build-essential git libncurses5-dev gawk gettext unzip file libssl-dev wget python3 ccache
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
-    - name: Initial Disk Cleanup
+    - name: Optimize disk space
       run: |
-        echo "=== Starting Disk Space Optimization ==="
-        sudo apt-get autoremove -y --purge
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift
+        sudo docker image prune --all --force
+        sudo docker container prune --force
         sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/*
-        sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
-        sudo journalctl --vacuum-time=1h
-        sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
-        sudo rm -rf /tmp/*
-        echo "=== Disk Space After Initial Cleanup ==="
-        df -h
+        sudo apt-get autoremove --purge -y
+        df -hT
 
-    - name: Install Minimal Dependencies
+    - name: Clone source code
+      working-directory: /workdir
       run: |
-        echo "=== Installing Minimal Dependencies ==="
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          build-essential \
-          libssl-dev \
-          libncurses5-dev \
-          gawk \
-          gettext \
-          unzip \
-          python3 \
-          subversion \
-          git \
-          wget \
-          curl \
-          file \
-          rsync
-        sudo apt-get clean
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Detect Source Branch
+    - name: Load custom configuration
       run: |
-        echo "=== Detecting Available Branches ==="
-        # 获取仓库的默认分支
-        git ls-remote --heads https://github.com/padavanonly/immortalwrt-mt798x | grep -E "refs/heads/(main|master|openwrt-21.02)" | head -5
-        # 设置默认分支变量
-        if git ls-remote --exit-code --heads https://github.com/padavanonly/immortalwrt-mt798x main > /dev/null 2>&1; then
-          echo "BRANCH=main" >> $GITHUB_ENV
-        elif git ls-remote --exit-code --heads https://github.com/padavanonly/immortalwrt-mt798x master > /dev/null 2>&1; then
-          echo "BRANCH=master" >> $GITHUB_ENV
-        else
-          # 尝试获取第一个可用分支
-          FIRST_BRANCH=$(git ls-remote --heads https://github.com/padavanonly/immortalwrt-mt798x | head -1 | awk -F'/' '{print $3}')
-          echo "BRANCH=$FIRST_BRANCH" >> $GITHUB_ENV
-        fi
-        echo "Using branch: $BRANCH"
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
 
-    - name: Clone Source with Space Optimization
-      run: |
-        echo "=== Cloning Source with Space Optimization ==="
-        echo "Using branch: ${{ env.BRANCH }}"
-        git clone \
-          --depth=1 \
-          --single-branch \
-          --branch ${{ env.BRANCH }} \
-          --filter=blob:none \
-          https://github.com/padavanonly/immortalwrt-mt798x \
-          openwrt
-        
-        cd openwrt
-        # 清理git历史节省空间
-        git gc --aggressive --prune=all
-        
-        echo "=== Source Code Size ==="
-        du -sh .
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
 
-    - name: Remove Problematic Feeds
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Download package
       run: |
         cd openwrt
-        echo "=== Cleaning Feeds Configuration ==="
-        # 完全移除有问题的feeds
-        sed -i '/modemfeed/d' feeds.conf.default
-        sed -i '/kiddin9/d' feeds.conf.default
-
-    - name: Setup Feeds
-      run: |
-        cd openwrt
-        echo "=== Setting up Feeds ==="
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: Apply Configuration
-      run: |
-        cd openwrt
-        echo "=== Applying Configuration ==="
-        # 从仓库根目录复制配置文件
-        cp ../.config .config
         make defconfig
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Download with Cache Optimization
+    - name: Compile the firmware
       run: |
         cd openwrt
-        echo "=== Downloading Packages ==="
-        
-        # 创建下载缓存目录
-        mkdir -p /tmp/dl-cache
-        [ -d dl ] && rm -rf dl
-        ln -sf /tmp/dl-cache dl
-        
-        # 使用更少的并行下载任务
-        make download -j1
+        echo -e "$(nproc) threads compile"
+        make -j$(nproc) || make -j1 V=s
 
-    - name: Compile with Memory Optimization
+    - name: Organize files
       run: |
-        cd openwrt
-        echo "=== Starting Compilation ==="
-        
-        # 显示编译前磁盘空间
-        echo "=== Disk Space Before Compilation ==="
-        df -h
-        
-        # 设置编译优化参数
-        export FORCE_UNSAFE_CONFIGURE=1
-        
-        # 分步骤编译以避免内存和磁盘压力
-        echo "Step 1: Compiling toolchain..."
-        make toolchain/install -j2
-        
-        echo "Step 2: Compiling kernel..."
-        make target/linux/compile -j2
-        
-        echo "Step 3: Compiling packages..."
-        make package/compile -j2
-        
-        echo "Step 4: Creating final image..."
-        make -j2
-        
-        echo "=== Disk Space After Compilation ==="
-        df -h
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
-    - name: Upload Artifacts
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: sl3000-firmware
-        path: openwrt/bin/targets/**/*
-        retention-days: 7
+        name: SL3000_firmware
+        path: ${{ env.FIRMWARE }}
+
+    - name: Release firmware
+      uses: softprops/action-gh-release@v2.1.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        files: ${{ env.FIRMWARE }}/*
+        name: SL3000-ImmortalWrt-${{ github.run_number }}
+        tag_name: SL3000-${{ github.run_number }}
