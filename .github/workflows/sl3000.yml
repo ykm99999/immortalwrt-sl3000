@@ -1,10 +1,7 @@
 name: Build ImmortalWrt SL3000
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+  workflow_dispatch:   # 只允许手动触发，不会因为 push 自动运行
 
 jobs:
   build:
