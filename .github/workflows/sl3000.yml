@@ -87,7 +87,7 @@ jobs:
           make -j$(nproc) V=s
 
       - name: Upload firmware
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: siluo-sl3000-firmware
           path: bin/targets/mediatek/mt7981/*
