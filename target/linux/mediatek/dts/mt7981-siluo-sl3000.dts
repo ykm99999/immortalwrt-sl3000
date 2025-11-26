@@ -1,146 +1,29 @@
 /dts-v1/;
 
-#include "mt7981.dtsi"
-
 / {
-    model = "Siluo SL-3000";
     compatible = "siluo,sl3000", "mediatek,mt7981";
+    model = "Siluo SL3000";
+
+    memory {
+        device_type = "memory";
+        reg = <0x40000000 0x20000000>; /* 512MB */
+    };
 
     chosen {
         bootargs = "console=ttyS0,115200n8";
     };
 
-    /* 1GB DDR4 内存 */
-    memory {
-        reg = <0x40000000 0x40000000>; /* 1GB */
-    };
-
-    aliases {
-        led-boot = &led_status;
-        led-failsafe = &led_status;
-        led-running = &led_status;
-        led-upgrade = &led_status;
-        ethernet0 = &gmac0;
-    };
-
-    leds {
-        compatible = "gpio-leds";
-
-        led_status: status {
-            label = "sl3000:green:status";
-            gpios = <&pio 12 GPIO_ACTIVE_HIGH>;
+    soc {
+        wifi@18000000 {
+            compatible = "mediatek,mt7981-wifi";
+            status = "okay";
         };
 
-        wan_led: wan {
-            label = "sl3000:blue:wan";
-            gpios = <&pio 13 GPIO_ACTIVE_HIGH>;
-        };
-
-        wifi_led: wifi {
-            label = "sl3000:green:wifi";
-            gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+        ethernet@15100000 {
+            compatible = "mediatek,mt7981-eth";
+            status = "okay";
         };
     };
-
-    keys {
-        compatible = "gpio-keys";
-
-        reset {
-            label = "reset";
-            gpios = <&pio 15 GPIO_ACTIVE_LOW>;
-            linux,code = <KEY_RESTART>;
-        };
-
-        wps {
-            label = "wps";
-            gpios = <&pio 16 GPIO_ACTIVE_LOW>;
-            linux,code = <KEY_WPS_BUTTON>;
-        };
-    };
-};
-
-/* 千兆以太网，定义 PHY 节点 */
-&gmac0 {
-    status = "okay";
-    phy-mode = "sgmii";
-    phy-handle = <&phy0>;
-};
-
-&mdio {
-    status = "okay";
-
-    phy0: ethernet-phy@0 {
-        reg = <0>;
-    };
-
-    phy1: ethernet-phy@1 {
-        reg = <1>;
-    };
-
-    phy2: ethernet-phy@2 {
-        reg = <2>;
-    };
-
-    phy3: ethernet-phy@3 {
-        reg = <3>;
-    };
-};
-
-/* WiFi6 AX3000 */
-&wifi {
-    status = "okay";
-    mediatek,eeprom = <&factory 0x0000>; /* 从 factory 分区读取校准数据 */
-};
-
-/* SPI-NOR 32MB */
-&spi0 {
-    status = "okay";
-
-    flash@0 {
-        compatible = "jedec,spi-nor";
-        reg = <0>;
-        spi-max-frequency = <50000000>;
-
-        partitions {
-            compatible = "fixed-partitions";
-            #address-cells = <1>;
-            #size-cells = <1>;
-
-            partition@0 {
-                label = "bootloader";
-                reg = <0x00000000 0x00100000>; /* 1MB */
-                read-only;
-            };
-
-            partition@100000 {
-                label = "config";
-                reg = <0x00100000 0x00100000>; /* 1MB */
-            };
-
-            partition@200000 {
-                label = "factory";
-                reg = <0x00200000 0x00100000>; /* 1MB */
-            };
-
-            partition@300000 {
-                label = "reserved";
-                reg = <0x00300000 0x01D00000>; /* 29MB */
-            };
-        };
-    };
-};
-
-/* eMMC 128GB */
-&mmc0 {
-    status = "okay";
-    bus-width = <8>;
-    non-removable;
-    cap-mmc-highspeed;
-    cap-mmc-hs200;
-    cap-mmc-hs400;
-    mmc-hs400-1_8v;
-    vmmc-supply = <&mt7981_regulator>;
-    vqmmc-supply = <&mt7981_regulator>;
 
     partitions {
         compatible = "fixed-partitions";
@@ -148,13 +31,18 @@
         #size-cells = <1>;
 
         partition@0 {
-            label = "firmware";
-            reg = <0x00000000 0x700000000>; /* 112GB */
+            label = "bootloader";
+            reg = <0x0 0x40000>;
         };
 
-        partition@700000000 {
-            label = "userdata";
-            reg = <0x700000000 0x100000000>; /* 16GB */
+        partition@40000 {
+            label = "firmware";
+            reg = <0x40000 0x1fc0000>;
+        };
+
+        partition@2000000 {
+            label = "factory";
+            reg = <0x2000000 0x100000>;
         };
     };
 };
