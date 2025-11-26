@@ -57,15 +57,12 @@ jobs:
       run: |
         cd openwrt
         rm -f .config
-        
-        # 使用更简单的方法创建配置文件
         {
           echo "CONFIG_TARGET_mediatek=y"
           echo "CONFIG_TARGET_mediatek_mt7981=y"
           echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y"
           echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
           echo "CONFIG_TARGET_IMAGES_GZIP=y"
-          echo "CONFIG_LUCI_LANG_zh-cn=y"
           echo "CONFIG_LINUX_6_6=y"
           echo "CONFIG_PACKAGE_luci=y"
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y"
@@ -86,20 +83,4 @@ jobs:
           echo "CONFIG_PACKAGE_luci-app-firewall=y"
           echo "CONFIG_PACKAGE_luci-app-upnp=y"
           echo "CONFIG_PACKAGE_luci-app-ddns=y"
-          echo "CONFIG_PACKAGE_luci-app-attendedsysupgrade=y"
-          echo "CONFIG_PACKAGE_luci-app-opkg=y"
-          echo "CONFIG_CCACHE=y"
-        } > .config
-        
-        make defconfig
-
-    - name: Build firmware
-      run: |
-        cd openwrt
-        make -j$(($(nproc) + 1)) CCACHE=1
-
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: siluo-sl3000-firmware
-        path: openwrt/bin/targets/mediatek/mt7981/*
+          echo "CONFIG_PACKAGE
