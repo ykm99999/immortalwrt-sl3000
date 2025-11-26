@@ -14,10 +14,15 @@ jobs:
           cd openwrt
           git checkout openwrt-24.10
 
-      - name: Copy custom device files
+      - name: Add custom DTS
         run: |
-          cp target/linux/mediatek/dts/mt7981-siluo-sl3000.dts openwrt/target/linux/mediatek/dts/
-          cp target/linux/mediatek/image/mt7981.mk openwrt/target/linux/mediatek/image/
+          curl -L https://raw.githubusercontent.com/ykm888/immortalwrt-sl3000/refs/heads/main/target/linux/mediatek/dts/mt7981-siluo-sl3000.dts \
+            -o openwrt/target/linux/mediatek/dts/mt7981-siluo-sl3000.dts
+
+      - name: Add custom mk
+        run: |
+          curl -L https://raw.githubusercontent.com/ykm888/immortalwrt-sl3000/refs/heads/main/target/linux/mediatek/image/mt7981.mk \
+            -o openwrt/target/linux/mediatek/image/mt7981.mk
 
       - name: Install dependencies
         run: |
