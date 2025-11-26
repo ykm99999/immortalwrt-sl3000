@@ -62,22 +62,35 @@ jobs:
         run: |
           cd openwrt
           rm -f .config
-          cat > .config <<'EOF'
+          bash -c 'cat > .config <<EOF
+# 固件目标平台
 CONFIG_TARGET_mediatek=y
 CONFIG_TARGET_mediatek_mt7981=y
 CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y
+
+# 内核版本
 CONFIG_LINUX_6_6=y
+
+# 镜像格式
 CONFIG_TARGET_ROOTFS_INITRAMFS=y
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_IMAGES_GZIP=y
+
+# LuCI 中文界面
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-theme-bootstrap=y
+
+# Docker 支持
 CONFIG_PACKAGE_docker=y
 CONFIG_PACKAGE_dockerd=y
 CONFIG_PACKAGE_luci-app-docker=y
+
+# 在线升级
 CONFIG_PACKAGE_luci-app-attendedsysupgrade=y
 CONFIG_PACKAGE_luci-app-opkg=y
+
+# 网络加速
 CONFIG_PACKAGE_luci-app-turboacc=y
 CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
 CONFIG_PACKAGE_kmod-ipt-offload=y
@@ -85,6 +98,8 @@ CONFIG_PACKAGE_kmod-shortcut-fe=y
 CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
 CONFIG_PACKAGE_kmod-nft-fullcone=y
 CONFIG_PACKAGE_kmod-tcp-bbr=y
+
+# Wi-Fi 驱动与无线管理
 CONFIG_PACKAGE_kmod-mt7981-wifi=y
 CONFIG_PACKAGE_luci-app-wireless=y
 CONFIG_PACKAGE_luci-i18n-wireless-zh-cn=y
@@ -92,12 +107,15 @@ CONFIG_PACKAGE_wpad-openssl=y
 CONFIG_PACKAGE_hostapd=y
 CONFIG_PACKAGE_iw=y
 CONFIG_PACKAGE_wireless-tools=y
+
+# 常用工具
 CONFIG_PACKAGE_luci-app-firewall=y
 CONFIG_PACKAGE_luci-app-upnp=y
 CONFIG_PACKAGE_luci-app-samba4=y
 CONFIG_PACKAGE_luci-app-ddns=y
+
 CONFIG_CCACHE=y
-EOF
+EOF'
           make defconfig
 
       - name: Build firmware
