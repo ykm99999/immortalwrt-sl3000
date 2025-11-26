@@ -1,4 +1,4 @@
-name: Build Siluo SL-3000 ImmortalWrt
+name: Build Siluo SL-3000 ImmortalWrt 24.10
 
 on:
   workflow_dispatch:   # 只允许手动触发，不会因 push 自动运行
@@ -8,8 +8,16 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+      - name: Checkout ImmortalWrt 24.10 source
+        run: |
+          git clone https://github.com/immortalwrt/immortalwrt.git openwrt
+          cd openwrt
+          git checkout openwrt-24.10
+
+      - name: Copy custom device files
+        run: |
+          cp target/linux/mediatek/dts/mt7981-siluo-sl3000.dts openwrt/target/linux/mediatek/dts/
+          cp target/linux/mediatek/image/mt7981.mk openwrt/target/linux/mediatek/image/
 
       - name: Install dependencies
         run: |
@@ -21,11 +29,13 @@ jobs:
 
       - name: Update feeds
         run: |
+          cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Configure target
         run: |
+          cd openwrt
           rm -f .config
           make defconfig
           cat <<'EOF' > .config
@@ -33,61 +43,26 @@ jobs:
           CONFIG_TARGET_mediatek_mt7981=y
           CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y
           CONFIG_LINUX_6_6=y
-          CONFIG_TARGET_ROOTFS_INITRAMFS=y
-          CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_IMAGES_GZIP=y
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-          CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_docker=y
-          CONFIG_PACKAGE_dockerd=y
           CONFIG_PACKAGE_luci-app-docker=y
-          CONFIG_PACKAGE_luci-app-attendedsysupgrade=y
-          CONFIG_PACKAGE_luci-app-opkg=y
           CONFIG_PACKAGE_luci-app-passwall2=y
-          CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
-          CONFIG_PACKAGE_passwall2-core=y
-          CONFIG_PACKAGE_passwall2-ss=y
-          CONFIG_PACKAGE_passwall2-ssr=y
-          CONFIG_PACKAGE_passwall2-v2ray=y
-          CONFIG_PACKAGE_passwall2-xray=y
-          CONFIG_PACKAGE_passwall2-trojan=y
-          CONFIG_PACKAGE_passwall2-chinadns-ng=y
-          CONFIG_PACKAGE_passwall2-dns2socks=y
           CONFIG_PACKAGE_luci-app-ssr-plus=y
-          CONFIG_PACKAGE_luci-i18n-ssr-plus-zh-cn=y
-          CONFIG_PACKAGE_ssr-libev=y
-          CONFIG_PACKAGE_v2ray-core=y
-          CONFIG_PACKAGE_xray-core=y
-          CONFIG_PACKAGE_trojan=y
-          CONFIG_PACKAGE_simple-obfs=y
           CONFIG_PACKAGE_luci-app-turboacc=y
-          CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
-          CONFIG_PACKAGE_kmod-ipt-offload=y
-          CONFIG_PACKAGE_kmod-shortcut-fe=y
-          CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
-          CONFIG_PACKAGE_kmod-nft-fullcone=y
-          CONFIG_PACKAGE_kmod-tcp-bbr=y
           CONFIG_PACKAGE_kmod-mt7981-wifi=y
-          CONFIG_PACKAGE_luci-app-wireless=y
-          CONFIG_PACKAGE_luci-i18n-wireless-zh-cn=y
-          CONFIG_PACKAGE_wpad-openssl=y
-          CONFIG_PACKAGE_hostapd=y
-          CONFIG_PACKAGE_iw=y
-          CONFIG_PACKAGE_wireless-tools=y
-          CONFIG_PACKAGE_luci-app-firewall=y
-          CONFIG_PACKAGE_luci-app-upnp=y
-          CONFIG_PACKAGE_luci-app-samba4=y
-          CONFIG_PACKAGE_luci-app-ddns=y
+          CONFIG_PACKAGE_kmod-mmc=y
+          CONFIG_PACKAGE_uboot-envtools=y
           EOF
           make defconfig
 
       - name: Build firmware
         run: |
+          cd openwrt
           make -j$(nproc) V=s
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: siluo-sl3000-firmware
-          path: bin/targets/mediatek/mt7981/*
+          path: openwrt/bin/targets/mediatek/mt7981/*
