@@ -1,11 +1,13 @@
-name: Build Siluo SL-3000 ImmortalWrt 24.10
+name: Build Siluo SL-3000 ImmortalWrt 24.10 - improved
 
 on:
-  workflow_dispatch:   # 手动触发，不会因 push 自动运行
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build ImmortalWrt MT7981 Siluo SL3000
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
 
     steps:
       - name: Checkout ImmortalWrt 24.10 source
@@ -52,16 +54,35 @@ jobs:
           CONFIG_TARGET_mediatek_mt7981=y
           CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y
           CONFIG_LINUX_6_6=y
+          CONFIG_TARGET_ROOTFS_INITRAMFS=y
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+          CONFIG_TARGET_IMAGES_GZIP=y
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_docker=y
+          CONFIG_PACKAGE_dockerd=y
           CONFIG_PACKAGE_luci-app-docker=y
-          CONFIG_PACKAGE_luci-app-passwall2=y
-          CONFIG_PACKAGE_luci-app-ssr-plus=y
+          CONFIG_PACKAGE_luci-app-attendedsysupgrade=y
+          CONFIG_PACKAGE_luci-app-opkg=y
           CONFIG_PACKAGE_luci-app-turboacc=y
+          CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
+          CONFIG_PACKAGE_kmod-ipt-offload=y
+          CONFIG_PACKAGE_kmod-shortcut-fe=y
+          CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
+          CONFIG_PACKAGE_kmod-nft-fullcone=y
+          CONFIG_PACKAGE_kmod-tcp-bbr=y
           CONFIG_PACKAGE_kmod-mt7981-wifi=y
-          CONFIG_PACKAGE_kmod-mmc=y
-          CONFIG_PACKAGE_uboot-envtools=y
+          CONFIG_PACKAGE_luci-app-wireless=y
+          CONFIG_PACKAGE_luci-i18n-wireless-zh-cn=y
+          CONFIG_PACKAGE_wpad-openssl=y
+          CONFIG_PACKAGE_hostapd=y
+          CONFIG_PACKAGE_iw=y
+          CONFIG_PACKAGE_wireless-tools=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_luci-app-ddns=y
           CONFIG_CCACHE=y
           EOF
           make defconfig
