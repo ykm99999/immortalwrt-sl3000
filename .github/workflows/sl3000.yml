@@ -1,78 +1,111 @@
-name: Build SL-3000 ImmortalWrt
+name: Build & Release Siluo SL-3000 Firmware
 
 on:
-  workflow_dispatch:   # ✅ 只手动触发
+  workflow_dispatch:   # 手动触发
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Free disk space
+    - name: 清理磁盘空间
       run: |
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /opt/ghc
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /usr/local/share/boost
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
         df -h
 
-    - name: Checkout
+    - name: 拉取仓库
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: 安装依赖
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential git wget curl unzip \
           libncurses5-dev libncursesw5-dev zlib1g-dev gawk flex gettext \
           libssl-dev python3 python3-distutils rsync
 
-    - name: Clone ImmortalWrt
+    - name: 克隆 ImmortalWrt
       run: |
         git clone https://github.com/immortalwrt/immortalwrt.git
         cd immortalwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Generate .config
+    - name: 生成 .config
       run: |
         cd immortalwrt
         cat > .config << 'EOF'
-        CONFIG_TARGET_ipq40xx=y
-        CONFIG_TARGET_ipq40xx_generic=y
-        CONFIG_TARGET_ipq40xx_generic_DEVICE_sl3000=y
+        CONFIG_TARGET_mediatek=y
+        CONFIG_TARGET_mediatek_mt7981=y
+        CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y
+
         CONFIG_TARGET_ROOTFS_SQUASHFS=y
         CONFIG_TARGET_IMAGES_GZIP=y
 
-        # Docker
+        CONFIG_PACKAGE_curl=y
+        CONFIG_PACKAGE_wget=y
+        CONFIG_PACKAGE_tcpdump=y
+        CONFIG_PACKAGE_ipset=y
+        CONFIG_PACKAGE_htop=y
+        CONFIG_PACKAGE_bash=y
+        CONFIG_PACKAGE_nano=y
+
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_luci-base=y
+        CONFIG_PACKAGE_luci-mod-admin-full=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_luci-app-upnp=y
+        CONFIG_PACKAGE_luci-app-sqm=y
+        CONFIG_PACKAGE_luci-app-ddns=y
+
         CONFIG_PACKAGE_dockerd=y
         CONFIG_PACKAGE_docker-ce=y
         CONFIG_PACKAGE_docker-cli=y
         CONFIG_PACKAGE_luci-app-dockerman=y
+
         CONFIG_PACKAGE_kmod-veth=y
         CONFIG_PACKAGE_kmod-bridge=y
         CONFIG_PACKAGE_kmod-xt-overlay=y
         CONFIG_PACKAGE_kmod-nf-nat=y
         CONFIG_PACKAGE_kmod-nf-conntrack=y
 
-        # LuCI & logo
-        CONFIG_PACKAGE_luci=y
-        CONFIG_PACKAGE_luci-theme-bootstrap=y
         CONFIG_PACKAGE_sl3000-logo=y
+
+        # 关闭自动更新相关插件
+        # CONFIG_PACKAGE_luci-app-attendedsysupgrade is not set
+        # CONFIG_PACKAGE_rpcd-mod-attendedsysupgrade is not set
+        # CONFIG_PACKAGE_luci-app-auto-update is not set
+        # CONFIG_PACKAGE_auto-update is not set
         EOF
 
         ./scripts/diffconfig.sh || true
 
-    - name: Build firmware
+    - name: 编译固件
       run: |
         cd immortalwrt
         make defconfig
         make -j$(nproc) || make -j1 V=s
-        echo "===== List bin/targets ====="
+        echo "===== 编译结果 ====="
         find bin/targets -type f
 
-    - name: Upload firmware to Release
+    - name: 上传固件到 Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: sl3000-firmware
+        path: immortalwrt/bin/targets/mediatek/mt7981/
+
+    - name: 发布到 Release
       uses: softprops/action-gh-release@v1
       with:
-        files: immortalwrt/bin/targets/*/*/*
+        tag_name: sl3000-$(date +'%Y%m%d')
+        name: "Siluo SL-3000 固件发布 $(date +'%Y-%m-%d')"
+        files: immortalwrt/bin/targets/mediatek/mt7981/*/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
