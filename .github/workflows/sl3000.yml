@@ -70,8 +70,9 @@ jobs:
         echo "===== List bin/targets ====="
         find bin/targets -type f
 
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
+    - name: Upload firmware to Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: sl3000-firmware
-        path: immortalwrt/bin/targets
+        files: immortalwrt/bin/targets/*/*/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
