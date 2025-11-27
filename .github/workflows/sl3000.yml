@@ -1,13 +1,7 @@
 name: Build SL-3000 ImmortalWrt
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch:   # ✅ 只手动触发，不会因 push 自动运行
 
 jobs:
   build:
@@ -55,11 +49,6 @@ jobs:
         cd immortalwrt
         make defconfig
         make -j$(nproc) || make -j1 V=s
-
-    - name: Verify build outputs
-      run: |
-        cd immortalwrt/bin/targets
-        find . -type f -name "*.bin" -print
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
