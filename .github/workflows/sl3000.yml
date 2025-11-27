@@ -1,13 +1,21 @@
 name: Build SL-3000 ImmortalWrt
 
 on:
-  workflow_dispatch:   # ✅ 只手动触发，不会因 push 自动运行
+  workflow_dispatch:   # ✅ 只手动触发
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/local/share/boost
+        df -h
+
     - name: Checkout
       uses: actions/checkout@v4
 
