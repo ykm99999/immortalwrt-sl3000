@@ -1,6 +1,12 @@
-name: Build SL-3000 Full Firmware (LuCI Optimized)
+name: Build SL-3000 ImmortalWrt
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -8,142 +14,55 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout my repo
+    - name: Checkout
       uses: actions/checkout@v4
-
-    - name: Aggressive disk cleanup
-      run: |
-        echo "==== Before cleanup ===="
-        df -h
-
-        # 删除常见大目录
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
-        sudo rm -rf /usr/local/share/{boost,powershell,chromium,edge,firefox,gecko_driver,selenium,vcpkg}
-
-        # 清理 apt 缓存和日志
-        sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/*
-
-        # 删除 docker 镜像和缓存
-        sudo docker system prune -af || true
-
-        # 删除临时文件
-        sudo rm -rf /tmp/*
-
-        echo "==== After cleanup ===="
-        df -h
-
-    - name: Checkout ImmortalWrt source
-      run: |
-        git clone https://github.com/immortalwrt/immortalwrt.git
-        cd immortalwrt
-        git checkout openwrt-24.10
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential flex bison gettext libncurses5-dev libssl-dev \
-          python3 python3-distutils unzip file wget rsync libelf-dev ccache
+        sudo apt-get install -y build-essential git wget curl unzip \
+          libncurses5-dev libncursesw5-dev zlib1g-dev gawk flex gettext \
+          libssl-dev python3 python3-distutils rsync
 
-    - name: Add custom DTS & mk
+    - name: Clone ImmortalWrt
       run: |
-        # 下载 DTS 文件到内核目录
-        curl -L -o immortalwrt/target/linux/mediatek/files-6.6/arch/arm64/boot/dts/mediatek/mt7981-siluo-sl3000.dts \
-          https://raw.githubusercontent.com/ykm99999/immortalwrt-sl3000/refs/heads/main/target/linux/mediatek/dts/mt7981-siluo-sl3000.dts
+        git clone https://github.com/immortalwrt/immortalwrt.git
+        cd immortalwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-        # 下载 mk 文件到 image 目录
-        curl -L -o immortalwrt/target/linux/mediatek/image/mt7981.mk \
-          https://raw.githubusercontent.com/ykm99999/immortalwrt-sl3000/refs/heads/main/target/linux/mediatek/image/mt7981.mk
-
-    - name: Configure target (full firmware + LuCI)
+    - name: Generate .config
       run: |
         cd immortalwrt
-        echo "CONFIG_TARGET_mediatek=y" > .config
-        echo "CONFIG_TARGET_mediatek_mt7981=y" >> .config
-        echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_siluo_sl3000=y" >> .config
-        echo "CONFIG_LINUX_6_6=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        # Docker 主程序与管理界面
+        echo "CONFIG_PACKAGE_dockerd=y" >> .config
+        echo "CONFIG_PACKAGE_docker-ce=y" >> .config
+        echo "CONFIG_PACKAGE_docker-cli=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
 
-        # 基础系统
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_netifd=y" >> .config
-        echo "CONFIG_PACKAGE_ip-full=y" >> .config
-        echo "CONFIG_PACKAGE_logd=y" >> .config
+        # Docker 依赖内核模块
+        echo "CONFIG_PACKAGE_kmod-veth=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-bridge=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-xt-overlay=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
 
-        # 网络服务（只保留 dnsmasq-full）
-        echo "CONFIG_PACKAGE_dnsmasq=n" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-        echo "CONFIG_PACKAGE_ppp=y" >> .config
-        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        # Logo 包
+        echo "CONFIG_PACKAGE_sl3000-logo=y" >> .config
 
-        # 无线支持
-        echo "CONFIG_PACKAGE_kmod-mt7981-wifi=y" >> .config
-        echo "CONFIG_PACKAGE_wpad-openssl=y" >> .config
-        echo "CONFIG_PACKAGE_hostapd=y" >> .config
-        echo "CONFIG_PACKAGE_iw=y" >> .config
-        echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
-
-        # LuCI Web 界面
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config
-        echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-opkg=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-wireless=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-wireless-zh-cn=y" >> .config
-
-        # 去掉 default-settings，避免架构不兼容
-        echo "CONFIG_PACKAGE_default-settings=n" >> .config
-        echo "CONFIG_PACKAGE_default-settings-chn=n" >> .config
-
-        # SSL/TLS 支持
-        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
-        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
-
-        # 编译优化
-        echo "CONFIG_CCACHE=y" >> .config
-        echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
-        echo "CONFIG_USE_MKLIBS=y" >> .config
-        echo "CONFIG_USE_SSTRIP=y" >> .config
-
+    - name: Build firmware
+      run: |
+        cd immortalwrt
         make defconfig
-
-    - name: Build firmware (full)
-      run: |
-        cd immortalwrt
-        echo "==== Disk usage before build ===="
-        df -h
         make -j$(nproc) || make -j1 V=s
-        echo "==== Disk usage after build ===="
-        df -h
 
-    - name: Upload initramfs image
+    - name: Verify build outputs
+      run: |
+        cd immortalwrt/bin/targets
+        find . -type f -name "*.bin" -print
+
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: sl3000-initramfs
-        path: immortalwrt/bin/targets/*/*/*initramfs*.bin
-
-    - name: Upload squashfs image
-      uses: actions/upload-artifact@v4
-      with:
-        name: sl3000-squashfs
-        path: immortalwrt/bin/targets/*/*/*squashfs*.bin
-
-    - name: Cleanup build_dir and staging_dir after success
-      if: success()
-      run: |
-        rm -rf immortalwrt/build_dir immortalwrt/staging_dir immortalwrt/tmp
-        echo "==== Disk usage after cleanup ===="
-        df -h
-
-    - name: Show last 200 lines of build log if failed
-      if: failure()
-      run: |
-        echo "==== Build failed, showing last 200 lines of log ===="
-        tail -n 200 immortalwrt/build.log || true
+        name: sl3000-firmware
+        path: immortalwrt/bin/targets/*/*/*.bin
