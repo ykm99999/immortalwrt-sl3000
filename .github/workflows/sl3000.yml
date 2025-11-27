@@ -28,30 +28,42 @@ jobs:
     - name: Generate .config
       run: |
         cd immortalwrt
-        # Docker 主程序与管理界面
-        echo "CONFIG_PACKAGE_dockerd=y" >> .config
-        echo "CONFIG_PACKAGE_docker-ce=y" >> .config
-        echo "CONFIG_PACKAGE_docker-cli=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
+        cat > .config << 'EOF'
+        CONFIG_TARGET_ipq40xx=y
+        CONFIG_TARGET_ipq40xx_generic=y
+        CONFIG_TARGET_ipq40xx_generic_DEVICE_sl3000=y
+        CONFIG_TARGET_ROOTFS_SQUASHFS=y
+        CONFIG_TARGET_IMAGES_GZIP=y
 
-        # Docker 依赖内核模块
-        echo "CONFIG_PACKAGE_kmod-veth=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-bridge=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-xt-overlay=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        # Docker
+        CONFIG_PACKAGE_dockerd=y
+        CONFIG_PACKAGE_docker-ce=y
+        CONFIG_PACKAGE_docker-cli=y
+        CONFIG_PACKAGE_luci-app-dockerman=y
+        CONFIG_PACKAGE_kmod-veth=y
+        CONFIG_PACKAGE_kmod-bridge=y
+        CONFIG_PACKAGE_kmod-xt-overlay=y
+        CONFIG_PACKAGE_kmod-nf-nat=y
+        CONFIG_PACKAGE_kmod-nf-conntrack=y
 
-        # Logo 包
-        echo "CONFIG_PACKAGE_sl3000-logo=y" >> .config
+        # LuCI & logo
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+        CONFIG_PACKAGE_sl3000-logo=y
+        EOF
+
+        ./scripts/diffconfig.sh || true
 
     - name: Build firmware
       run: |
         cd immortalwrt
         make defconfig
         make -j$(nproc) || make -j1 V=s
+        echo "===== List bin/targets ====="
+        find bin/targets -type f
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
         name: sl3000-firmware
-        path: immortalwrt/bin/targets/*/*/*.bin
+        path: immortalwrt/bin/targets
