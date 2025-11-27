@@ -65,19 +65,29 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+
+        # 基础系统
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         echo "CONFIG_PACKAGE_netifd=y" >> .config
         echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_logd=y" >> .config
+
+        # 网络服务（只保留 dnsmasq-full）
+        echo "CONFIG_PACKAGE_dnsmasq=n" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+
+        # 无线支持
         echo "CONFIG_PACKAGE_kmod-mt7981-wifi=y" >> .config
         echo "CONFIG_PACKAGE_wpad-openssl=y" >> .config
         echo "CONFIG_PACKAGE_hostapd=y" >> .config
         echo "CONFIG_PACKAGE_iw=y" >> .config
         echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
-        echo "CONFIG_CCACHE=y" >> .config
+
         # LuCI Web 界面
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
@@ -87,6 +97,21 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-wireless=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-wireless-zh-cn=y" >> .config
+
+        # 去掉 default-settings，避免架构不兼容
+        echo "CONFIG_PACKAGE_default-settings=n" >> .config
+        echo "CONFIG_PACKAGE_default-settings-chn=n" >> .config
+
+        # SSL/TLS 支持
+        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
+        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+
+        # 编译优化
+        echo "CONFIG_CCACHE=y" >> .config
+        echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+        echo "CONFIG_USE_MKLIBS=y" >> .config
+        echo "CONFIG_USE_SSTRIP=y" >> .config
+
         make defconfig
 
     - name: Build firmware (full)
